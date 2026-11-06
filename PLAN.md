@@ -124,11 +124,35 @@ Choices:
 - **At normal strength** the same cap is not rigid. Its interior moves near the drag-limited f/β, and only a rim about one drag length wide feels the trench. The rigid-plate Γ doesn't describe it.
 - **Reservoir across maintenance**: six seam merges along the trench leave Σ∫W dℓ unchanged.
 
+## Slice 4: power-law creep and damage (done)
+
+Implemented from the document:
+
+| Document | Code (`index.html`) |
+| --- | --- |
+| Ĥ = ½ f(s) B̄ max(ε̇_E, ε̇_min)^(1/n−1) (eq. visc) | `solvePass`; B̄ calibrated so that B_c, B_l give the n = 1 strength at ε̇_ref = 10⁻¹⁵ s⁻¹; ε̇_min = 10⁻¹⁷ s⁻¹ |
+| Picard iteration, with seam contact states updated in the same passes (Alg. 4) | `solveVelocity` |
+| G = −k_d ε̇_E s + k_h(1 − s), f(s) = s_min + (1 − s_min)s (§1.8, Alg. 6) | `damageSources`, integrated exactly per step at that step's strain rate; S = V s |
+| C_t(s) (eq. interface) | seam loop in `solvePass`: C_t × f(s̄) of the copy pair |
+
+Choices:
+
+- **Passes**: the first solve iterates up to 30 Picard passes (to a 1% velocity change). After that, each step does one pass, so viscosity and contact states lag by one step and keep converging from step to step. On the slab-feedback and localization checks, one pass per step matches two passes to within a few percent.
+- **Contact stays stiff**: damage weakens shear coupling C_t, but not the stiff normal C_n that enforces one-sided contact. A damaged transform slides more easily but still doesn't open.
+- **Parameters**: n = 3 (UI slider 1–4), k_d = 2 (strain to damage), k_h = 0.05 Myr⁻¹ (20 Myr healing), s_min = 0.1. At these values damage is mild at plate-interior strain rates and strong at boundary rates (s_eq ≈ 0.07 at 10⁻¹⁴ s⁻¹).
+
+### Measured (`npm run check`)
+
+- **Power law**: one plate, negligible drag, a torque-free load (the tangential gradient of a·x). Doubling the load multiplies strain rates by 2.000 at n = 1 and by 7.94 at n = 3 (8 expected). From a cold start, Picard takes 9–12 passes to reach a 1% velocity change.
+- **Damage integrator**: six uneven steps at fixed strain rate match the exact solution to 3 × 10⁻¹⁶.
+- **Localization**: one plate with no seam, sheared along the equator by a zonal push. The strain rate within 6° of the equator, relative to the global mean, goes 3.68 → 3.87 over 20 Myr with damage, and 3.68 → 3.73 without. Integrity falls to 0.88. So localization happens, but slowly at these k_d and k_h. How strongly it should localize is a design choice that matters for transform nucleation in step 5.
+- **One-sided coupling** at n = 3: wrong-direction motion is still 0.005 of the uncoupled rate. A converging trench now passes 0.50 of the uncoupled closing rate (it was 0.88 at n = 1). The response is nonlinear, so these ratios depend on the push.
+- **Slab feedback** at n = 3 with a stiff cap: terminal 4.4 cm/yr against 4.19 predicted. At Γ = 1.41 it runs away.
+
 ## Next, in order
 
 Physics first (see "How we work" in the README). Each step comes with component checks on small hand-built worlds (`makeWorld` with `plateOf`, `seamOf`, `stateOf`; `w.bodyForce`).
 
-4. **Rest of the rheology**: power-law creep with n = 3 (eq. visc), sharing the Picard loop with the contact states; damage and healing G(s, ε̇), f(s) in Ĥ, and C_n(s), C_t(s). Checks: a strip in uniform extension against the analytic power-law strain rate; damage growing under sustained shear and recovering when it stops, at the law's rates.
 5. **Seam life cycle** (§1.10, §2.8 "Seam events"): 𝒩 and δ per copy, persistence clocks, and the six events. Check: test 8 on hand-built worlds. Also test on a triple-junction world whether events remove the all-seam slivers that end runs. That they would is a conjecture from slice 1, not yet tested.
 
 Numerics, only when stability or looks need them: second-order transport (§2.3), the exact intersection remap (§2.9), a geometric conservation law exact on the sphere, WebGPU kernels and multigrid (§3).

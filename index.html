@@ -125,7 +125,7 @@ kbd { font-family: var(--font-data); font-size: 0.72rem; border: 1px solid var(-
   <div class="head">
     <div>
       <h1>Putty Plates</h1>
-      <div class="sub">Slice 3 · force balance with slab pull</div>
+      <div class="sub">Slice 4 · power-law plates with slab pull and damage</div>
     </div>
     <span class="clock" id="clock">0 <small>Myr</small></span>
     <button id="toggle" aria-expanded="true">Hide</button>
@@ -171,6 +171,11 @@ kbd { font-family: var(--font-data); font-size: 0.72rem; border: 1px solid var(-
       <span class="hint" id="stHint"></span>
     </div>
     <div class="ctl">
+      <div class="top"><label class="name" for="ne">Creep exponent n</label><span class="val" id="neVal"></span></div>
+      <input type="range" id="ne" min="1" max="4" step="0.5" value="3">
+      <span class="hint">Ĥ ∝ ε̇^(1/n − 1): higher n makes plate interiors stiffer and boundaries weaker</span>
+    </div>
+    <div class="ctl">
       <div class="top"><label class="name" for="ck">Keel drag c<sub>k</sub></label><span class="val" id="ckVal"></span></div>
       <input type="range" id="ck" min="0" max="10" step="0.1" value="3">
       <span class="hint">β = β₀ [1 + c<sub>k</sub> (H/H₀)³], H = crust + thermal lithosphere</span>
@@ -203,6 +208,7 @@ kbd { font-family: var(--font-data); font-size: 0.72rem; border: 1px solid var(-
       <button data-mode="crust" aria-pressed="false">Crustal thickness</button>
       <button data-mode="speed" aria-pressed="false">Speed</button>
       <button data-mode="strain" aria-pressed="false">Strain rate</button>
+      <button data-mode="damage" aria-pressed="false">Integrity</button>
     </div>
     <div class="ctl">
       <div class="top"><label class="name" for="ex">Relief exaggeration</label><span class="val" id="exVal"></span></div>
@@ -245,8 +251,9 @@ kbd { font-family: var(--font-data); font-size: 0.72rem; border: 1px solid var(-
    triangle's tangent plane, buoyancy load from the GPE (gravitational
    potential energy) Φ, thickness-dependent drag, seam pair coupling.
    Slab reservoir: W and L per subducting copy, slab pull and slab drag.
-   Not yet from the document: power-law creep (n = 1 here), damage,
-   seam life cycle, limited reconstruction (first-order upwind),
+   Power-law creep (Picard, one pass per step after a converged first
+   solve) and damage s weakening Ĥ and seam shear coupling.
+   Not yet from the document: seam life cycle, limited reconstruction (first-order upwind),
    exact polygon-intersection remap (area-share remap instead), CDT
    rebuilds (local split/collapse/flip instead).
    Units: positions on the unit sphere (areas in sr, velocities in rad/Myr),
@@ -400,7 +407,10 @@ const RHEO = {
   Cn_tr: 1e19, Ct_tr: 1e21,  // trench, converging: subduction takes up convergence; shear is a megathrust proxy
                              // (an opening trench or a closing ridge uses the stiff Cn_tf: see seamContact)
   strength: 1,               // multiplier on Bc and Bl (UI)
-  tol: 1e-4, maxIter: 600, stepIter: 40, coarse: true, contactPasses: 4 // PCG: relative residual, first solve, per step after (warm-started)
+  n: 3, edotRef: 1e-15, edotMin: 1e-17, // power-law creep (eq. visc): Bc, Bl give the strength at edotRef (1/s); edotMin caps the stiffness
+  kd: 2, kh: 0.05, smin: 0.1, // damage G = −kd ε̇_E s + kh (1 − s), ε̇ in 1/Myr, kh in 1/Myr; f(s) = smin + (1 − smin) s
+  tol: 1e-4, maxIter: 600, stepIter: 40, coarse: true, // PCG: relative residual, iterations for the first solve and per step after (warm-started)
+  passes: 1, firstPasses: 30, picardTol: 1e-2 // Picard passes (viscosity and contact states) per step and for the first solve; relative velocity change to stop
 };
 function phiCol(h, rho, Th) { // eq. (phi), N/m
   const e = elevation(h, rho, Th), D = RHEO.D, M1 = Math.PI * Th * Th / (4 * PHYS.dT);
@@ -579,23 +589,36 @@ function seamContact(w) {
 
 // Active-set iteration: solve with the current contact states, update them from the new velocity,
 // repeat until none changes (or a few passes; the next step continues from here).
-function solveVelocity(w, maxIter = RHEO.stepIter) {
-  let stiff = seamContact(w), passes = 0, iters = 0, changed = 0;
+// Picard iteration (Alg. 4): each pass takes the viscosity from the current velocity's strain rates and
+// the seam contact states from its normal jumps, then solves. A step does a few passes and continues
+// from there at the next step (warm start); the first solve iterates to convergence.
+// Area-weighted mean of the triangle strain rates around each copy, 1/Myr.
+function copyStrainRates(w, U) {
+  const et = strainRates(w, U), T = w.T, TC = w.TC, X = w.X, nc = w.CM.length, ec = new Float64Array(nc), ws = new Float64Array(nc);
+  for (let t = 0; t < w.TP.length; t++) { const a = sphArea(X, T[3*t], T[3*t+1], T[3*t+2]); for (let k = 0; k < 3; k++) { ec[TC[3*t+k]] += a * et[t]; ws[TC[3*t+k]] += a; } }
+  for (let c = 0; c < nc; c++) ec[c] /= ws[c] || 1;
+  return ec;
+}
+
+function solveVelocity(w, maxIter = RHEO.stepIter, maxPasses = RHEO.passes) {
+  let stiff = seamContact(w), passes = 0, iters = 0, changed = 0, du = 0;
   for (;;) {
-    solvePass(w, maxIter, stiff); passes++; iters += w.solve.iters;
+    const U0 = w.U && w.U.length === 3 * w.CM.length ? w.U.slice() : null;
+    solvePass(w, maxIter, stiff, RHEO.n !== 1 && U0 ? strainRates(w, U0) : null); passes++; iters += w.solve.iters;
+    if (U0) { let d = 0, u = 0; for (let i = 0; i < U0.length; i++) { d += (w.U[i] - U0[i]) ** 2; u += w.U[i] ** 2; } du = Math.sqrt(d / (u || 1)); } else du = 1;
     const next = seamContact(w); changed = 0;
     for (let i = 0; i < next.length; i++) if (next[i] !== stiff[i]) changed++;
     stiff = next;
-    if (!changed || passes >= RHEO.contactPasses) break;
+    if ((!changed && (RHEO.n === 1 || du < RHEO.picardTol)) || passes >= maxPasses) break;
   }
-  Object.assign(w.solve, { passes, iters, changed }); w.contact = stiff;
+  Object.assign(w.solve, { passes, iters, changed, du }); w.contact = stiff;
 }
 
-function solvePass(w, maxIter, stiff) {
+function solvePass(w, maxIter, stiff, edotT) { // edotT: strain rate per triangle (1/Myr) for the power law, or null
   if (!w.vpat || w.vpat.topo !== w.topoVersion) w.vpat = velocityPattern(w);
   const P = w.vpat, K = P.K, nc = w.CM.length, X = w.X, E = markerBases(X);
-  const h = new Float64Array(nc), th = new Float64Array(nc), pt = new Float64Array(nc);
-  for (let c = 0; c < nc; c++) { const A = w.A[c]; h[c] = w.V[c] / A; th[c] = Math.max(0, w.Z[c] / A);
+  const h = new Float64Array(nc), th = new Float64Array(nc), pt = new Float64Array(nc), si = new Float64Array(nc);
+  for (let c = 0; c < nc; c++) { const A = w.A[c]; h[c] = w.V[c] / A; th[c] = Math.max(0, w.Z[c] / A); si[c] = w.V[c] > 0 ? Math.min(1, Math.max(0, w.S[c] / w.V[c])) : 1;
     pt[c] = phiCol(h[c], w.V[c] > 0 ? w.M[c] / w.V[c] : PHYS.rho_oc, th[c]) - PHI_R; }
   K.fill(0); const F = new Float64Array(2 * nc), fr = newFrame(), Bm = 3 * nc;
   const Bk = new Float64Array(18), DB = new Float64Array(18);
@@ -604,7 +627,9 @@ function solvePass(w, maxIter, stiff) {
     const c0 = w.TC[3*t], c1 = w.TC[3*t+1], c2 = w.TC[3*t+2];
     elementFrame(X, E, w.T[3*t], w.T[3*t+1], w.T[3*t+2], fr);
     const hc = (h[c0] + h[c1] + h[c2]) / 3, tc = (th[c0] + th[c1] + th[c2]) / 3, pc = (pt[c0] + pt[c1] + pt[c2]) / 3;
-    const Hc = 0.5 * RHEO.strength * (RHEO.Bc * hc + RHEO.Bl * thermalThickness(tc));
+    const fs = RHEO.smin + (1 - RHEO.smin) * (si[c0] + si[c1] + si[c2]) / 3; // f(s)
+    const er = edotT ? Math.pow(Math.max(edotT[t] / SEC_MYR, RHEO.edotMin) / RHEO.edotRef, 1 / RHEO.n - 1) : 1;
+    const Hc = 0.5 * RHEO.strength * fs * er * (RHEO.Bc * hc + RHEO.Bl * thermalThickness(tc)); // eq. (visc)
     // B (3×6) in the local frame
     for (let k = 0; k < 3; k++) { Bk[2*k] = fr.gx[k]; Bk[2*k+1] = 0; Bk[6 + 2*k] = 0; Bk[6 + 2*k+1] = fr.gy[k]; Bk[12 + 2*k] = fr.gy[k]; Bk[12 + 2*k+1] = fr.gx[k]; }
     for (let j = 0; j < 6; j++) { DB[j] = 2*Bk[j] + Bk[6+j]; DB[6+j] = Bk[j] + 2*Bk[6+j]; DB[12+j] = 0.5*Bk[12+j]; }
@@ -645,7 +670,8 @@ function solvePass(w, maxIter, stiff) {
     const ell = 0.5 * len * R_M;
     for (const [k, m, p, q] of [[0, a, 0, 2], [1, b, 1, 3]]) {
       const st = stiff[2*e + k]; if (type === RIDGE && !st) continue;
-      const Cn = st ? RHEO.Cn_tf : RHEO.Cn_tr, Ct = type === TRANSFORM ? RHEO.Ct_tf : type === TRENCH ? RHEO.Ct_tr : 0;
+      const c1s = w.sC[4*e+p], c2s = w.sC[4*e+q], fsp = RHEO.smin + (1 - RHEO.smin) * 0.5 * (si[c1s] + si[c2s]); // shear coupling weakens with damage; the contact penalty does not
+      const Cn = st ? RHEO.Cn_tf : RHEO.Cn_tr, Ct = fsp * (type === TRANSFORM ? RHEO.Ct_tf : type === TRENCH ? RHEO.Ct_tr : 0);
       const o = 6 * m, n1 = nx*E[o] + ny*E[o+1] + nz*E[o+2], n2 = nx*E[o+3] + ny*E[o+4] + nz*E[o+5], nn = Math.hypot(n1, n2), u1 = n1 / nn, u2 = n2 / nn;
       const c00 = ell * (Cn*u1*u1 + Ct*u2*u2), c01 = ell * (Cn - Ct) * u1*u2, c11 = ell * (Cn*u2*u2 + Ct*u1*u1);
       for (let r = 0; r < 4; r++) { const sl = 4 * P.seamSlot[8*e + 4*k + r], sg = r === 1 || r === 2 ? -1 : 1; K[sl] += sg*c00; K[sl+1] += sg*c01; K[sl+2] += sg*c01; K[sl+3] += sg*c11; }
@@ -1077,7 +1103,7 @@ function makeWorld(params) {
   w.ops = { split: 0, collapse: 0, seam: 0, flip: 0 };
   const sum0 = k => w[k].reduce((s, v) => s + v, 0);
   w.budget = { V0: sum0('V'), M0: sum0('M'), Z0: sum0('Z'), Vc: 0, Mc: 0, Vs: 0, Ms: 0, Zs: 0, Zsrc: 0 };
-  solveVelocity(w, RHEO.maxIter);
+  solveVelocity(w, RHEO.maxIter, RHEO.firstPasses);
   return w;
 }
 
@@ -1229,6 +1255,14 @@ function slabSources(w, dt, slabZ, slabA) {
   }
 }
 
+// Damage and healing (§1.8, Alg. 6): ds/dt = kh − (kd ε̇ + kh) s, integrated exactly over the step at
+// this step's strain rate; S = V s.
+function damageSources(w, dt, edot) {
+  for (let c = 0; c < w.CM.length; c++) { if (!(w.V[c] > 0)) continue;
+    const s = Math.min(1, Math.max(0, w.S[c] / w.V[c])), r = RHEO.kd * edot[c] + RHEO.kh, seq = RHEO.kh / r;
+    w.S[c] = w.V[c] * (seq + (s - seq) * Math.exp(-r * dt)); }
+}
+
 function step(w, dtWant, retry = true) {
   if (!w.noMaintain) maintain(w);
   if (w.kinematic) computeU(w); else solveVelocity(w);
@@ -1255,6 +1289,7 @@ function step(w, dtWant, retry = true) {
       const Zn = A * th2; B.Zsrc += Zn - w.Z[c]; w.Z[c] = Zn;
     }
     slabSources(w, dt, F.slabZ, F.slabA);
+    if (!w.noDamage) damageSources(w, dt, copyStrainRates(w, w.U));
     w.t += dt;
     return dt;
   }
@@ -1291,6 +1326,7 @@ const terrainRamp = ramp([
 const ageRamp = ramp([[0, [214, 56, 48]], [8, [236, 140, 58]], [20, [232, 210, 92]], [40, [110, 180, 122]], [60, [60, 122, 182]], [80, [52, 56, 142]]]);
 const speedRamp = ramp([[0, [30, 34, 72]], [1, [52, 84, 150]], [2.5, [44, 150, 160]], [5, [150, 200, 100]], [8, [240, 200, 80]], [12, [250, 120, 60]]]);
 const strainRamp = ramp([[-4, [24, 26, 48]], [-3, [52, 60, 120]], [-2.3, [120, 80, 150]], [-1.6, [220, 110, 90]], [-1, [250, 220, 140]]]);
+const damageRamp = ramp([[0, [236, 84, 52]], [0.3, [236, 160, 70]], [0.6, [150, 150, 140]], [1, [40, 52, 80]]]);
 const thickRamp = ramp([[0, [24, 28, 60]], [5, [40, 70, 130]], [10, [50, 130, 150]], [25, [140, 190, 110]], [40, [236, 214, 120]], [60, [250, 244, 220]]]);
 const plateRGB = k => {
   const hgt = (k * 0.618034 + 0.1) % 1, s = 0.42, l = 0.52, a = s * Math.min(l, 1 - l);
@@ -1349,11 +1385,7 @@ function updateBuffers(w) {
   const nc = w.CM.length, X = w.X, ex = view.exaggeration / R_KM, mode = view.mode;
   const pos = new Float32Array(3 * nc), nrm = new Float32Array(3 * nc), col = new Float32Array(3 * nc), elev = new Float32Array(nc);
   let land = 0, area = 0, ec = null;
-  if (mode === 'strain') { // area-weighted mean of the triangle strain rates around each copy, 1/Myr
-    const et = strainRates(w, w.U), T = w.T, TC = w.TC, wsum = new Float64Array(nc); ec = new Float64Array(nc);
-    for (let t = 0; t < w.TP.length; t++) { const a = triArea(X, T[3*t], T[3*t+1], T[3*t+2]); for (let k = 0; k < 3; k++) { ec[TC[3*t+k]] += a * et[t]; wsum[TC[3*t+k]] += a; } }
-    for (let c = 0; c < nc; c++) ec[c] /= wsum[c];
-  }
+  if (mode === 'strain') ec = copyStrainRates(w, w.U);
   for (let c = 0; c < nc; c++) {
     const A = w.A[c], h = w.V[c] / A, rho = w.V[c] > 0 ? w.M[c] / w.V[c] : PHYS.rho_oc, th = w.Z[c] / A, e = elevation(h, rho, th);
     elev[c] = e; area += A; if (e > 0) land += A;
@@ -1365,6 +1397,7 @@ function updateBuffers(w) {
     else if (mode === 'crust') k = thickRamp(h);
     else if (mode === 'speed') k = speedRamp(Math.hypot(w.U[3*c], w.U[3*c+1], w.U[3*c+2]) * R_KM / 10);
     else if (mode === 'strain') k = strainRamp(Math.log10(Math.max(ec[c], 1e-6)));
+    else if (mode === 'damage') k = damageRamp(w.V[c] > 0 ? w.S[c] / w.V[c] : 1);
     else { const b = plateRGB(w.CP[c]), f = h > 20 ? 1.18 : 0.8; k = [b[0] * f, b[1] * f, b[2] * f]; }
     col[3*c] = Math.min(255, k[0]) / 255; col[3*c+1] = Math.min(255, k[1]) / 255; col[3*c+2] = Math.min(255, k[2]) / 255;
   }
@@ -1446,7 +1479,7 @@ const ui = {
   dt: () => 0.02 * Math.pow(250, $('dt').value / 100),
   N: () => Math.round(1000 * Math.pow(100, $('nv').value / 100) / 100) * 100,
   cf: () => +$('cf').value, np: () => +$('np').value, km: () => +$('km').value,
-  st: () => Math.pow(10, +$('st').value), ck: () => +$('ck').value, ta: () => +$('ta').value
+  st: () => Math.pow(10, +$('st').value), ck: () => +$('ck').value, ta: () => +$('ta').value, ne: () => +$('ne').value
 };
 let running = true, seed = (Math.random() * 2 ** 31) | 0, fps = 60, costMs = 0, subSteps = 0, meshMode = 'lagrangian';
 const fmtN = n => n.toLocaleString('en-US');
@@ -1465,6 +1498,7 @@ function refreshLabels() {
   $('stVal').textContent = `× ${st < 1 ? st.toFixed(2) : st.toFixed(1)}`;
   $('stHint').textContent = `drag length √(Ĥ/β) ≈ ${fmtN(Math.round(Math.sqrt(0.5 * st * (RHEO.Bc * PHYS.h_oc + RHEO.Bl * thermalThickness(PHYS.Theta_ss)) / dragBeta(PHYS.h_oc, PHYS.Theta_ss)) / 1000 / 100) * 100)} km under old ocean`;
   $('ckVal').textContent = ui.ck().toFixed(1);
+  $('neVal').textContent = ui.ne().toFixed(1);
   $('taVal').textContent = `${ui.ta().toFixed(1)} Myr`;
   $('taHint').textContent = `steady pull ≈ ${(ui.ta() * SEC_MYR * G * PHYS.rho_m * PHYS.alpha * PHYS.Theta_ss * 1000 * 0.01 / 3.15576e7 / 1e12).toFixed(1)} TN/m per cm/yr of 80 Myr ocean subducting; slab drag ξ ≈ ${(RHEO.xi * 0.01 / 3.15576e7 / 1e12).toFixed(1)} TN/m per cm/yr`;
 }
@@ -1476,7 +1510,8 @@ function setRunning(r) { running = r; $('run').textContent = r ? 'Pause' : 'Run'
 $('run').onclick = () => setRunning(!running);
 $('reset').onclick = () => regenerate();
 $('reseed').onclick = () => { seed = (Math.random() * 2 ** 31) | 0; regenerate(); };
-for (const id of ['dt', 'nv', 'cf', 'np', 'km', 'st', 'ck', 'ta']) $(id).addEventListener('input', refreshLabels);
+for (const id of ['dt', 'nv', 'cf', 'np', 'km', 'st', 'ck', 'ta', 'ne']) $(id).addEventListener('input', refreshLabels);
+$('ne').addEventListener('input', () => { RHEO.n = ui.ne(); });
 $('ta').addEventListener('input', () => { RHEO.tau_a = ui.ta(); });
 $('st').addEventListener('input', () => { RHEO.strength = ui.st(); });
 $('ck').addEventListener('input', () => { RHEO.ck = ui.ck(); });
@@ -1514,6 +1549,7 @@ function drawLegend() {
   else if (view.mode === 'age') { bar(ageRamp, 0, 80, ['0', '40', '80 Myr'], 'Thermal age πΘ²/(4κΔT²)'); L.insertAdjacentHTML('beforeend', `<div class="keys"><span>${sw([118, 114, 106])}continental</span></div>`); }
   else if (view.mode === 'crust') bar(thickRamp, 0, 60, ['0', '30', '60 km'], 'Crustal thickness h');
   else if (view.mode === 'speed') bar(speedRamp, 0, 12, ['0', '6', '12 cm/yr'], 'Speed |u| from the force balance');
+  else if (view.mode === 'damage') bar(damageRamp, 0, 1, ['0 damaged', '0.5', '1 intact'], 'Integrity s (damage weakens strength and seam shear coupling)');
   else if (view.mode === 'strain') bar(strainRamp, -4, -1, ['10⁻⁴', '10⁻²·⁵', '10⁻¹ /Myr'], 'Effective strain rate ε̇_E');
   else L.innerHTML = `<span>Seams (fixed type for the run)</span><div class="keys"><span>${sw(SEAMRGB[0])}ridge</span><span>${sw(SEAMRGB[1])}transform</span><span>${sw(SEAMRGB[2])}trench</span></div><span class="helptext">Plate fill is lighter where crust is continental.</span>`;
 }

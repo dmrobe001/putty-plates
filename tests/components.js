@@ -8,7 +8,7 @@ require('./harness').inPage(() => {
   const twoPlates = (seamType, N = 1200) => makeWorld({ seed: 9, N, contFrac: 0, plates: 2, kappaM: 0.1, meshMode: 'lagrangian',
     plateOf: (x, y, z) => z > 0 ? 0 : 1, seamOf: () => ({ type: seamType, sub: seamType === TRENCH ? 1 : -1 }),
     stateOf: () => ({ h: PHYS.h_oc, rho: PHYS.rho_oc, Th: 0 }) });
-  const tight = (w, f) => { const t = RHEO.tol; RHEO.tol = 1e-9; w.U = null; f(w); RHEO.tol = t; };
+  const tight = (w, f) => { const t = RHEO.tol, p = RHEO.passes; RHEO.tol = 1e-9; RHEO.passes = 60; w.U = null; f(w); RHEO.tol = t; RHEO.passes = p; };
   // seam pairs: closing rate (u1 − u2)·n and slip, in cm/yr
   const seamRates = w => { const X = w.X, out = [];
     for (let e = 0; e < w.sA.length; e++) { const a = w.sA[e], b = w.sB[e], mx = X[3*a] + X[3*b], my = X[3*a+1] + X[3*b+1], mz = X[3*a+2] + X[3*b+2];
@@ -90,6 +90,52 @@ require('./harness').inPage(() => {
       }
     }
     RHEO.strength = st; RHEO.stepIter = si; RHEO.tau_a = ta;
+  }
+
+  // Power-law creep (eq. visc): one plate, uniform state, negligible drag, a torque-free load (the
+  // tangential gradient of a·x). Doubling the load must multiply strain rates by 2ⁿ.
+  {
+    const ax = [0.48, 0.6, 0.64], b0 = RHEO.beta0; res.powerLaw = [];
+    for (const n of [1, 3]) {
+      const n0 = RHEO.n; RHEO.n = n; RHEO.beta0 = 1e10; const rmsE = [], info = [];
+      for (const k of [1, 2]) {
+        const w = makeWorld({ seed: 3, N: 1500, contFrac: 0, plates: 1, kappaM: 0.1, meshMode: 'lagrangian', stateOf: () => ({ h: 7, rho: 2900, Th: 6e4 }) });
+        const f0 = 1e6 * k; w.bodyForce = (x, y, z) => { const d = ax[0]*x + ax[1]*y + ax[2]*z; return [f0 * (ax[0] - d*x), f0 * (ax[1] - d*y), f0 * (ax[2] - d*z)]; };
+        tight(w, w => solveVelocity(w, 5000, 60));
+        const e = strainRates(w, w.U); let q = 0; for (const v of e) q += v * v; rmsE.push(Math.sqrt(q / e.length));
+        info.push({ passes: w.solve.passes, du: +w.solve.du.toExponential(0), median_edot_per_s: +([...e].sort((a, b) => a - b)[e.length >> 1] / SEC_MYR).toExponential(1) });
+      }
+      RHEO.n = n0; RHEO.beta0 = b0;
+      res.powerLaw.push({ n, strain_rate_ratio: +(rmsE[1] / rmsE[0]).toFixed(3), expected: 2 ** n, picard: info });
+    }
+  }
+
+  // Damage integrator (Alg. 6): uneven steps at fixed strain rate must match the exact solution
+  // s(t) = s_eq + (s0 − s_eq) e^{−(kd ε̇ + kh) t}, and healing at zero strain rate.
+  {
+    const w = makeWorld({ seed: 3, N: 400, contFrac: 0, plates: 1, kappaM: 0.1, meshMode: 'lagrangian' });
+    for (let c = 0; c < w.CM.length; c++) w.S[c] = 0.5 * w.V[c];
+    const nc = w.CM.length, ed = Float64Array.from({ length: nc }, (_, c) => c % 2 ? 0 : 0.3); // 1/Myr
+    let t = 0; for (const dt of [0.1, 2.3, 0.7, 5, 0.01, 3]) { damageSources(w, dt, ed); t += dt; }
+    let err = 0; for (let c = 0; c < nc; c++) { const r = RHEO.kd * ed[c] + RHEO.kh, seq = RHEO.kh / r, ex = seq + (0.5 - seq) * Math.exp(-r * t); err = Math.max(err, Math.abs(w.S[c] / w.V[c] - ex)); }
+    res.damageIntegrator = { Myr: t, max_abs_error: +err.toExponential(1) };
+  }
+
+  // Localization: one plate (no seam), zonal shear push (east in the north, west in the south). With damage
+  // the shear should concentrate near the equator over time. Index = mean strain rate within 6° of the
+  // equator over the global mean.
+  res.localization = [];
+  for (const damage of [false, true]) {
+    const w = makeWorld({ seed: 6, N: 1500, contFrac: 0, plates: 1, kappaM: 0.1, meshMode: 'lagrangian', stateOf: () => ({ h: 7, rho: 2900, Th: 6e4 }) });
+    w.noSources = true; w.noDamage = !damage; const f0 = 4e5;
+    w.bodyForce = (x, y, z) => { const k = z > 0 ? f0 : -f0; return [-k * y, k * x, 0]; };
+    solveVelocity(w, RHEO.maxIter, RHEO.firstPasses);
+    const index = () => { const e = copyStrainRates(w, w.U); let a = 0, na = 0, b = 0;
+      for (let c = 0; c < w.CM.length; c++) { const z = w.X[3*w.CM[c]+2]; b += e[c]; if (Math.abs(z) < 0.1) { a += e[c]; na++; } } return (a / na) / (b / w.CM.length); };
+    const idx = [+index().toFixed(2)]; let smin = 1;
+    while (w.t < 20 && !w.exhausted) { advance(w, 5); idx.push(+index().toFixed(2)); }
+    for (let c = 0; c < w.CM.length; c++) smin = Math.min(smin, w.S[c] / w.V[c]);
+    res.localization.push({ damage, index_every_5_Myr: idx.join(' '), min_integrity: +smin.toFixed(2), stopped: w.exhausted ? w.fail : null });
   }
 
   // Test 3 on the sphere: a rigid rotation produces no strain in any triangle.
