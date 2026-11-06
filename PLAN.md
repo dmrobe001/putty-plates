@@ -149,10 +149,48 @@ Choices:
 - **One-sided coupling** at n = 3: wrong-direction motion is still 0.005 of the uncoupled rate. A converging trench now passes 0.50 of the uncoupled closing rate (it was 0.88 at n = 1). The response is nonlinear, so these ratios depend on the push.
 - **Slab feedback** at n = 3 with a stiff cap: terminal 4.4 cm/yr against 4.19 predicted. At Γ = 1.41 it runs away.
 
+## Slice 5: seam life cycle (done)
+
+The seam is the resolved limit of a damaged band (document §1.8, rewritten): a band one cell wide with damaged strength Ĥ(s) carries the same traction as a seam with C_t = Ĥ(s, ε̇)/w. Damage decides where seams exist; motion and buoyancy decide their type; the transform is the hub between types.
+
+| Document | Code (`index.html`) |
+| --- | --- |
+| C_t = Ĥ(s, ε̇_w)/w, w = one cell, ε̇_w = slip/w (eq. interface) | seam loop in `solvePass` |
+| Seam damage from a fault zone of physical width w_f (default 20 km) | `seamStrainRates`, fed to `damageSources` |
+| Seams as an explicit edge set; tips allowed; polarity stored per edge relative to its orientation | `w.seamInfo`, `isSeam`, `deriveCopies` |
+| Events with persistence clocks (§1.10, table) | `seamEvents`, parameters in `LIFE` |
+| Copies rebuilt by sector, integrals split by corner area (§2.8) | `rebuildCopies` |
+| Plates relabelled as the regions seams separate | `relabelPlates` |
+
+Choices:
+
+- **Loading of a transform** is read from its contact force (penalty × normal velocity): compression above P_init with 𝒩 > 𝒩_on on the denser side starts subduction (the denser side subducts); tension above T_rift with δ < 40 km on both sides opens a ridge.
+- **Hysteresis**: the trench stall threshold v_stall = 0.05 cm/yr sits below P_init/ξ ≈ 0.08 cm/yr, the convergence at which the same load would restart it. With v_stall = 0.3 a small planet chattered: 60 subduction starts and 32 stalls in 15 Myr. With 0.05 it dropped to 46 and 10.
+- **Initial seams** start fully damaged (s = 0).
+- **Parameters** (`LIFE`): persistence 2 Myr; s_nuc = 0.15; s_heal = 0.85 with slip below 0.2 cm/yr; 𝒩_on = 1,500 t/m² (ocean of about 20 Myr), 𝒩_off = 0; P_init = T_rift = 5 × 10¹¹ N/m.
+
+### Measured (`npm run check`, about 15 s)
+
+- **Test 8, events** (two hemispheres split at the equator unless noted; cooling frozen; budgets close to about 5 × 10⁻¹⁵ in every scenario):
+  - **Healing**: an idle transform (k_h raised to keep the test short) welds shut: 59 of 61 edges heal and the rest go by mesh merges. The result is one plate, no split markers, and h uniform to 0.13%.
+  - **Nucleation**: a seamless sheet sheared along the equator, with fast damage (k_d = 40), grows 501 transform edges, all within 10° of the equator. It is a wide swath, not a single fault: every damaged edge in the band nucleates.
+  - **Subduction initiation**: a transform pushed shut between 80 Myr and 5 Myr ocean becomes a trench on 57 of 61 edges. All 57 subduct the old side.
+  - **Rifting**: pulled apart, 2 Myr lithosphere opens a ridge (59 of 60 edges) and creates crust; 80 Myr lithosphere stays a transform.
+  - **Ridge death**: a ridge pushed shut becomes a transform.
+  - **Breakoff** (stiff cap at 4,000 markers, continent riding to the centre of its trench, steady external push): the central trench subducts until the continent arrives (about 6 Myr), then breaks off to a transform. With the push still on and 60 Myr ocean on the other side, subduction restarts with the opposite polarity by 9 Myr. That is polarity reversal after collision, from the rules alone.
+- **Slab feedback (test 7)** now needs a frictionless megathrust to match the rigid-plate prediction. The check uses a near-zero fault width, so seams stay at s ≈ 0. At Γ = 0.47 it levels off at 3.6–3.9 cm/yr (4.19 predicted); at Γ = 1.41 it runs away. With 100× plate strength and the default fault width, the megathrust's own C_t = Ĥ(s)/w welds the cap.
+
+### Measured: small planets (2,000 markers, seeds 11 and 22; run once)
+
+- Events fire throughout: in seed 11's first 6 Myr there are 18 nucleations, 38 subduction starts and 34 breakoffs (many at continental margins, followed by reversed subduction), plus rifts.
+- Both runs still stop early, at 5.8 and 16.3 Myr, with the mesh tangling at all-seam triangles at junctions (markers with 3–4 copies).
+- **The conjecture from slice 1 is false**: events don't remove junction slivers. Frequent type changes add junction complexity.
+
 ## Next, in order
 
 Physics first (see "How we work" in the README). Each step comes with component checks on small hand-built worlds (`makeWorld` with `plateOf`, `seamOf`, `stateOf`; `w.bodyForce`).
 
-5. **Seam life cycle** (§1.10, §2.8 "Seam events"): 𝒩 and δ per copy, persistence clocks, and the six events. Check: test 8 on hand-built worlds. Also test on a triple-junction world whether events remove the all-seam slivers that end runs. That they would is a conjecture from slice 1, not yet tested.
+6. **Junction-aware mesh adaptation** (the document's Adapt and seam-respecting rebuild, §2.9): remove sectors that have shrunk to a sliver at junctions, for example by merging the junction marker along one of its seams or retriangulating the junction's star with seams as constraints. This is numerics, but it is now what ends every run. Check: a hand-built triple junction whose plates converge on it must run without tangling, with budgets exact.
+7. **Narrow nucleation**: nucleation currently converts every damaged edge in a band into a seam. Nucleating only along the band's minimum of integrity would give single faults. Check: the nucleation scenario yields one connected chain.
 
 Numerics, only when stability or looks need them: second-order transport (§2.3), the exact intersection remap (§2.9), a geometric conservation law exact on the sphere, WebGPU kernels and multigrid (§3).

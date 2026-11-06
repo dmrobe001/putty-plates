@@ -58,12 +58,14 @@ require('./harness').inPage(() => {
   // ℓ = Σ ℓ_e (n_e·x̂)² over trench edges and G = τ_a g ρm α Θ_tr. Γ = Gℓ / (ξℓ + βA_p).
   {
     const capCos = Math.cos(25 * Math.PI / 180), Th60 = 2 * PHYS.dT * Math.sqrt(PHYS.kappa * 60 / Math.PI), f0 = 2e6;
-    const st = RHEO.strength, si = RHEO.stepIter, ta = RHEO.tau_a; RHEO.strength = 100; RHEO.stepIter = 400;
+    // Rigid plate, frictionless boundary, as the lumped prediction assumes: plates 100× stronger; seams stay fully
+    // damaged (a near-zero fault-zone width keeps seams at s ≈ 0, tiny s_min) so that their shear coupling C_t = Ĥ(s)/w vanishes.
+    const st = RHEO.strength, si = RHEO.stepIter, ta = RHEO.tau_a, sm = RHEO.smin, kd = RHEO.kd, wf = RHEO.wFault; RHEO.strength = 100; RHEO.stepIter = 400; RHEO.smin = 1e-5; RHEO.wFault = 1e-4;
     const make = () => { const w = makeWorld({ seed: 4, N: 1500, contFrac: 0, plates: 2, kappaM: 0.1, meshMode: 'lagrangian',
         plateOf: (x, y, z) => z > capCos ? 0 : 1,
         seamOf: (p1, p2, mx) => mx > 0 ? { type: TRENCH, sub: 0 } : { type: RIDGE, sub: -1 },
         stateOf: () => ({ h: PHYS.h_oc, rho: PHYS.rho_oc, Th: Th60 }) });
-      w.noSources = true; w.bodyForce = (x, y, z, p) => p === 0 ? [f0 * (1 - x * x), -f0 * x * y, -f0 * x * z] : [0, 0, 0]; return w; };
+      w.noSources = true; w.noEvents = true; w.bodyForce = (x, y, z, p) => p === 0 ? [f0 * (1 - x * x), -f0 * x * y, -f0 * x * z] : [0, 0, 0]; return w; };
     const w0 = make(), X = w0.X, phiCap = phiCol(PHYS.h_oc, PHYS.rho_oc, Th60) - PHI_R; let bA = 0, F = 0, ell = 0;
     for (let c = 0; c < w0.CM.length; c++) if (w0.CP[c] === 0) { const m = w0.CM[c], x = X[3*m], a = w0.A[c] * R_M * R_M; bA += dragBeta(PHYS.h_oc, Th60) * a; F += f0 * (1 - x * x) * a; }
     for (let e = 0; e < w0.sA.length; e++) { const a = w0.sA[e], b = w0.sB[e];
@@ -77,7 +79,7 @@ require('./harness').inPage(() => {
     res.slabFeedback = [];
     for (const tau of [5, 15]) {
       RHEO.tau_a = tau; const Gl = tau * SEC_MYR * Gc * ell, Gam = Gl / (RHEO.xi * ell + bA);
-      const w = make(); solveVelocity(w, 5000); const v0 = capSpeed(w), sp = [];
+      const w = make(); solveVelocity(w, 5000, 60); const v0 = capSpeed(w), sp = [];
       while (w.t < 40 && !w.exhausted) { advance(w, 5); sp.push(+capSpeed(w).toFixed(2)); }
       res.slabFeedback.push({ tau_a: tau, Gamma: +Gam.toFixed(2),
         v0_cm_yr: +v0.toFixed(2), v0_pred: +(F / (bA + RHEO.xi * ell) * SEC_MYR / 1e4).toFixed(2),
@@ -89,7 +91,7 @@ require('./harness').inPage(() => {
         res.slabReservoirAcrossMaintenance = { seam_merges: w.ops.seam - o.seam, relative_change: +((tot() - before) / before).toExponential(1) };
       }
     }
-    RHEO.strength = st; RHEO.stepIter = si; RHEO.tau_a = ta;
+    RHEO.strength = st; RHEO.stepIter = si; RHEO.tau_a = ta; RHEO.smin = sm; RHEO.kd = kd; RHEO.wFault = wf;
   }
 
   // Power-law creep (eq. visc): one plate, uniform state, negligible drag, a torque-free load (the
@@ -127,7 +129,7 @@ require('./harness').inPage(() => {
   res.localization = [];
   for (const damage of [false, true]) {
     const w = makeWorld({ seed: 6, N: 1500, contFrac: 0, plates: 1, kappaM: 0.1, meshMode: 'lagrangian', stateOf: () => ({ h: 7, rho: 2900, Th: 6e4 }) });
-    w.noSources = true; w.noDamage = !damage; const f0 = 4e5;
+    w.noSources = true; w.noEvents = true; w.noDamage = !damage; const f0 = 4e5;
     w.bodyForce = (x, y, z) => { const k = z > 0 ? f0 : -f0; return [-k * y, k * x, 0]; };
     solveVelocity(w, RHEO.maxIter, RHEO.firstPasses);
     const index = () => { const e = copyStrainRates(w, w.U); let a = 0, na = 0, b = 0;
@@ -136,6 +138,60 @@ require('./harness').inPage(() => {
     while (w.t < 20 && !w.exhausted) { advance(w, 5); idx.push(+index().toFixed(2)); }
     for (let c = 0; c < w.CM.length; c++) smin = Math.min(smin, w.S[c] / w.V[c]);
     res.localization.push({ damage, index_every_5_Myr: idx.join(' '), min_integrity: +smin.toFixed(2), stopped: w.exhausted ? w.fail : null });
+  }
+
+  // Test 8 (seam events), on two hemispheres split at the equator unless noted. Budgets are checked across
+  // every event; Θ is frozen (no cooling) so each scenario keeps the buoyancy it was built with.
+  {
+    const sum = (w, k) => w[k].reduce((q, v) => q + v, 0);
+    const budgetErr = w => { const B = w.budget; return Math.max(Math.abs((sum(w, 'V') - (B.V0 + B.Vc - B.Vs)) / B.V0), Math.abs((sum(w, 'M') - (B.M0 + B.Mc - B.Ms)) / B.M0), Math.abs((sum(w, 'Z') - (B.Z0 + B.Zsrc - B.Zs)) / B.Z0)); };
+    const types = w => { const n = [0, 0, 0]; for (let e = 0; e < w.sA.length; e++) n[w.sT[e]]++; return { ridge: n[0], transform: n[1], trench: n[2] }; };
+    const hemis = (seamType, stateOf) => { const w = makeWorld({ seed: 9, N: 1200, contFrac: 0, plates: 2, kappaM: 0.1, meshMode: 'lagrangian',
+      plateOf: (x, y, z) => z > 0 ? 0 : 1, seamOf: () => ({ type: seamType, sub: seamType === TRENCH ? 1 : -1 }), stateOf }); w.noSources = true; return w; };
+    const ThAge = a => 2 * PHYS.dT * Math.sqrt(PHYS.kappa * a / Math.PI), ocean = a => () => ({ h: PHYS.h_oc, rho: PHYS.rho_oc, Th: ThAge(a) });
+    const run = (w, T) => { let worst = 0; while (w.t < T && !w.exhausted) { advance(w, 0.5); worst = Math.max(worst, budgetErr(w)); } return worst; };
+    res.events = {};
+    // Healing: an idle transform whose damage recovers (k_h raised to keep the test short) must weld shut.
+    { const kh = RHEO.kh; RHEO.kh = 0.5; const w = hemis(TRANSFORM, ocean(60)); const s0 = types(w); const err = run(w, 10); RHEO.kh = kh;
+      let hdev = 0; for (let c = 0; c < w.CM.length; c++) hdev = Math.max(hdev, Math.abs(w.V[c] / w.A[c] - PHYS.h_oc) / PHYS.h_oc);
+      res.events.healing = { seams_before: s0, seams_after: types(w), copies_minus_markers: w.CM.length - w.X.length / 3, plates_after: new Set(w.CP).size, max_h_deviation: +hdev.toExponential(1), worst_budget: +err.toExponential(1), events: w.events }; }
+    // Nucleation: one plate (no seam) sheared along the equator, with fast damage. Transforms should appear near the equator.
+    { const kd = RHEO.kd; RHEO.kd = 40; const w = makeWorld({ seed: 6, N: 1500, contFrac: 0, plates: 1, kappaM: 0.1, meshMode: 'lagrangian', stateOf: ocean(60) });
+      w.noSources = true; const f0 = 4e5; w.bodyForce = (x, y, z) => { const k = z > 0 ? f0 : -f0; return [-k * y, k * x, 0]; }; solveVelocity(w, RHEO.maxIter, RHEO.firstPasses);
+      const err = run(w, 20); RHEO.kd = kd;
+      let near = 0; for (let e = 0; e < w.sA.length; e++) { const z = 0.5 * (w.X[3*w.sA[e]+2] + w.X[3*w.sB[e]+2]); if (Math.abs(z) < Math.sin(10 * Math.PI / 180)) near++; }
+      let split = 0; for (let m = 0; m < w.X.length / 3; m++) if (w.cOff[m+1] - w.cOff[m] > 1) split++;
+      res.events.nucleation = { seam_edges: w.sA.length, within_10deg_of_equator: near, split_markers: split, worst_budget: +err.toExponential(1), events: w.events }; }
+    // Subduction initiation: a transform pushed shut between old north (80 Myr) and young south (5 Myr). The old side must subduct.
+    { const w = hemis(TRANSFORM, (x, y, z, p) => ({ h: PHYS.h_oc, rho: PHYS.rho_oc, Th: ThAge(p === 0 ? 80 : 5) })); w.bodyForce = meridional(1);
+      const err = run(w, 8); let right = 0, tr = 0;
+      for (let e = 0; e < w.sA.length; e++) if (w.sT[e] === TRENCH) { tr++; const o = w.sSub[e] === 2 ? 2 : 0, c = w.sC[4*e + o]; if (w.Z[c] / w.A[c] > ThAge(40)) right++; }
+      res.events.subductionInitiation = { seams_after: types(w), trench_edges_with_old_side_subducting: `${right}/${tr}`, subducted_Mkm3: +(w.budget.Vs * R_KM * R_KM / 1e6).toFixed(2), worst_budget: +err.toExponential(1), events: w.events }; }
+    // Rifting: a transform pulled apart. Thin (2 Myr) lithosphere must open a ridge and create crust; thick (80 Myr) must not.
+    for (const age of [2, 80]) { const w = hemis(TRANSFORM, ocean(age)); w.bodyForce = meridional(-1); const err = run(w, 8);
+      res.events['rifting_' + age + 'Myr'] = { seams_after: types(w), created_Mkm3: +(w.budget.Vc * R_KM * R_KM / 1e6).toFixed(2), worst_budget: +err.toExponential(1), events: w.events }; }
+    // Ridge death: a ridge pushed shut (young, so it cannot start subducting) must become a transform.
+    { const w = hemis(RIDGE, ocean(5)); w.bodyForce = meridional(1); const err = run(w, 6);
+      res.events.ridgeDeath = { seams_after: types(w), worst_budget: +err.toExponential(1), events: w.events }; }
+    // Breakoff: a stiff polar cap subducting at its leading edge with a continent riding toward the centre of the
+    // trench, driven by a steady body force. Expected: breakoff where the continent arrives; with the push still
+    // on and old ocean on the other side, subduction may restart with the opposite polarity.
+    { const capCos = Math.cos(25 * Math.PI / 180), Th60 = ThAge(60), f0 = 2e6, st = RHEO.strength, si = RHEO.stepIter, sm = RHEO.smin, wf = RHEO.wFault;
+      RHEO.strength = 100; RHEO.stepIter = 400; RHEO.smin = 1e-5; RHEO.wFault = 1e-4;
+      const w = makeWorld({ seed: 4, N: 4000, contFrac: 0, plates: 2, kappaM: 0.1, meshMode: 'lagrangian', plateOf: (x, y, z) => z > capCos ? 0 : 1,
+        seamOf: (p1, p2, mx) => mx > 0 ? { type: TRENCH, sub: 0 } : { type: RIDGE, sub: -1 },
+        stateOf: (x, y, z, p) => p === 0 && x > 0.25 && x < 0.37 && Math.abs(y) < 0.12 ? { h: PHYS.h_cc, rho: PHYS.rho_cc, Th: PHYS.Theta_ss } : { h: PHYS.h_oc, rho: PHYS.rho_oc, Th: Th60 } });
+      w.noSources = true; w.bodyForce = (x, y, z, p) => p === 0 ? [f0 * (1 - x * x), -f0 * x * y, -f0 * x * z] : [0, 0, 0]; solveVelocity(w, 5000, 30);
+      const hist = []; let worst = 0;
+      while (w.t < 12 && !w.exhausted) { advance(w, 3); worst = Math.max(worst, budgetErr(w));
+        let front = 0; for (let c = 0; c < w.CM.length; c++) if (w.V[c] / w.A[c] > 20) front = Math.max(front, w.X[3*w.CM[c]]);
+        const cen = []; for (let e = 0; e < w.sA.length; e++) { const a = w.sA[e], b = w.sB[e]; if (0.5 * (w.X[3*a] + w.X[3*b]) > 0.2 && Math.abs(0.5 * (w.X[3*a+1] + w.X[3*b+1])) < 0.12) {
+          if (w.sT[e] !== TRENCH) { cen.push(['ridge', 'transform'][w.sT[e]]); continue; }
+          const o = w.sSub[e] === 2 ? 2 : 0, c = w.sC[4*e + o]; cen.push(w.V[c] / w.A[c] > 20 ? 'trench(continent subducting)' : 'trench'); } }
+        const counts = {}; for (const k of cen) counts[k] = (counts[k] || 0) + 1;
+        hist.push(`${Math.round(w.t)} Myr: continent front x = ${front.toFixed(2)} (trench near 0.41); central seam edges ${JSON.stringify(counts)}`); }
+      RHEO.strength = st; RHEO.stepIter = si; RHEO.smin = sm; RHEO.wFault = wf;
+      res.events.breakoff = { history: hist, worst_budget: +worst.toExponential(1), events: w.events, stopped: w.exhausted ? w.fail : null }; }
   }
 
   // Test 3 on the sphere: a rigid rotation produces no strain in any triangle.
@@ -183,7 +239,7 @@ require('./harness').inPage(() => {
   res.freeStream = [];
   for (const maintain of [false, true]) {
     const w = makeWorld({ seed: 5, N: 2000, contFrac: 0, plates: 4, kappaM: 0, meshMode: 'lagrangian' });
-    w.kinematic = true; w.omega = w.omega.map(() => [0, 0, 0]); w.noSources = true; w.noMaintain = !maintain;
+    w.kinematic = true; w.omega = w.omega.map(() => [0, 0, 0]); w.noSources = true; w.noEvents = true; w.noMaintain = !maintain;
     for (let c = 0; c < w.CM.length; c++) { const A = w.A[c]; w.V[c] = 7 * A; w.M[c] = 7 * 2900 * A; w.Z[c] = 5e4 * A; w.S[c] = 7 * A; }
     const a = [0.3, -0.5, 0.8], b = [0.6, 0.2, -0.1], s = 0.05 * w.L0;
     w.extraW = (x, y, z) => { const f = Math.sin(3 * (b[0]*x + b[1]*y + b[2]*z)); return [s * f * (a[1]*z - a[2]*y), s * f * (a[2]*x - a[0]*z), s * f * (a[0]*y - a[1]*x)]; };

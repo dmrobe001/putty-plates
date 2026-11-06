@@ -192,24 +192,28 @@ where $G$ is a damage and healing law, for example $G=-k_d\edot_E s+k_h(1-s)$. T
 \label{sec:seams}
 Plate boundaries are \emph{seams}: curves across which velocity may jump. Each side of a seam is a separate face with outward normal pointing across the seam.
 
-A seam is the limit of weakened coupling between neighbouring columns rather than a separate kind of object. Across any face, a velocity jump $\Delta\vect{u}$ is resisted by the traction
+A seam is the resolved limit of a damaged band, not a separate kind of object. A band of width $w$ in which the depth-integrated viscosity has fallen to $\Hint(s,\edot)$, sheared by a velocity difference $\Delta\vect u$, carries a traction of about $\Hint\,\Delta\vect u/w$. A seam stands for such a band once it has narrowed to the smallest width the mesh can show, one cell; across its faces a jump $\Delta\vect u$ is resisted by
 \begin{equation}
-  \vect{t} = C_n(s)\,(\Delta\vect{u}\cdot\vect{n})\,\vect{n} + C_t(s)\,(\Delta\vect{u}\cdot\vect{t})\,\vect{t},
+  \vect{t} = C_n\,(\Delta\vect{u}\cdot\vect{n})\,\vect{n} + C_t\,(\Delta\vect{u}\cdot\vect{t})\,\vect{t},
+  \qquad
+  C_t = \frac{\Hint(s,\edot_w)}{w},\quad \edot_w = \frac{|\Delta\vect u|}{w},
   \label{eq:interface}
 \end{equation}
-in the seam frame $(\vect{n},\vect{t})$, with coefficients that fall as the integrity $s$ of the adjacent columns falls. Intact material has coefficients so large that the jump vanishes, and the face is simply interior: its markers are not split, and the sheet is continuous there. Once damage has lowered the coupling far enough, the face is represented as a seam. Three seam types are used; the transform is the default, and the other two add sources or sinks of lithosphere.
+in the seam frame $(\vect{n},\vect{t})$, with $\Hint$ from~\eqref{eq:visc} evaluated for the columns on either side. The two descriptions are mechanically equivalent, so replacing one by the other changes no force: the seam is bookkeeping that lets slip grow without limit while the mesh stays intact. Intact material is simply interior, its markers unsplit and the sheet continuous.
 
-Each seam type says which normal motion has somewhere to go. A ridge fills opening with new lithosphere; a trench consumes convergence by subduction; a transform does neither. Normal motion that the seam can absorb is free of $C_n$; normal motion it cannot absorb is resisted with the stiff $C_n$ of a transform. The normal coupling is therefore one-sided, a contact condition: a ridge cannot close and a trench cannot open, however the forces act. Sustained tension across a trench, or compression across a ridge, is instead recorded by the force balance and is what the life cycle (Section~\ref{sec:lifecycle}) acts on.
+Inside a seam, localization continues below the grid. Its integrity evolves with the strain rate of a fault zone of physical width $w_f\ll w$, $\edot_f=|\Delta\vect u|/w_f$, through the same damage law $G$; a slipping seam therefore stays weak, while one that stops slipping heals at the rate $k_h$. The width $w_f$ is the physical length scale that keeps seams from healing merely because the mesh is coarse.
+
+Each seam type says which normal motion has somewhere to go. A ridge fills opening with new lithosphere; a trench consumes convergence by subduction; a transform does neither. Normal motion that the seam can absorb is free; normal motion it cannot absorb is resisted by a stiff contact penalty $C_n$, which does not weaken with damage. The normal coupling is therefore one-sided, a contact condition: a ridge cannot close and a trench cannot open, however the forces act. Sustained tension across a trench, or compression across a ridge, is instead recorded by the force balance and is what the life cycle (Section~\ref{sec:lifecycle}) acts on.
 
 \paragraph{Ridge.} While the faces separate they are uncoupled, and each is a free edge facing a zero-age ridge column, so~\eqref{eq:freeedge} applies with $\Phi_f=\Phi_r$. New lithosphere enters each face with state $(h_{oc},\rho_{oc},\Theta=0,s=1)$ at the rate at which the plate moves away from the seam. The spreading rate is not imposed; it results from the force balance.
 
-\paragraph{Transform.} The faces may slide past each other but barely separate: the traction~\eqref{eq:interface} applies with $C_n$ a large penalty and $C_t$ small. Material may be exchanged between the two faces if they converge or separate slightly.
+\paragraph{Transform.} The faces slide past each other, resisted by $C_t$, and are held together by the contact penalty. Material may be exchanged between the two faces if they converge or separate slightly. The transform is the intermediate state of the life cycle: trenches and ridges become transforms when they stop working, and transforms become trenches or ridges, or heal, according to how they are loaded.
 
 \paragraph{Trench.} One face belongs to the subducting plate, the other to the overriding plate. The seam moves with the overriding plate, so the overriding face is a material boundary. The subducting face is an outflow boundary: material leaves the sheet at the subduction rate
 \begin{equation}
   v_s = (\vect{u}_{\mathrm{sub}}-\vect{u}_{\mathrm{ovr}})\cdot\vect{n},
 \end{equation}
-where $\vect{n}$ points from the subducting into the overriding plate. The faces are coupled by~\eqref{eq:interface} with tangential coupling $C_t$ (a megathrust friction proxy) and small normal coupling $C_n$ while the faces converge, because convergence is taken up by subduction rather than by the faces pressing together; opening is resisted by the stiff $C_n$. An optional trench-suction traction $-P_{ts}\vect{n}$ acts on the overriding face.
+where $\vect{n}$ points from the subducting into the overriding plate. The faces are coupled by~\eqref{eq:interface}, with $C_t$ that of the damaged megathrust, and small normal coupling while the faces converge, because convergence is taken up by subduction rather than by the faces pressing together; opening is resisted by the stiff $C_n$. An optional trench-suction traction $-P_{ts}\vect{n}$ acts on the overriding face.
 
 \subsection{Slab reservoir}
 \label{sec:slabmodel}
@@ -235,23 +239,28 @@ Seams are created, change type and heal according to the state on either side an
 \end{equation}
 is positive when the column, thermal contraction included, is denser than the mantle it would sink into: old oceanic lithosphere has $\mathcal{N}>0$, while continents and very young oceanic lithosphere have $\mathcal{N}<0$. The thermal thickness $\delta=\sqrt\pi\,\Theta/\Delta T$ measures how cold and strong the plate is. Across a face, the relative velocity $\Delta\vect u$ separates into opening rate $v_o=\Delta\vect u\cdot\vect n$ and slip rate $v_t=\Delta\vect u\cdot\vect t$.
 
+Damage decides where a seam exists; motion and buoyancy decide its type. Every event switches between descriptions that are equivalent at the moment of the switch, and the transform is the hub through which the others pass.
+
 \begin{center}
 \small
 \begin{tabular}{@{}lll@{}}
 \toprule
 Event & From $\to$ to & Condition\\
 \midrule
-Transform nucleation & interior $\to$ transform & integrity below $s_{\mathrm{seam}}$ along a connected path (sustained shear)\\
-Subduction initiation & transform $\to$ trench & $v_o<-v_c$ and $\mathcal{N}>\mathcal{N}_c$ on at least one side\\
-Rifting & interior or transform $\to$ ridge & $v_o>v_r$ and $\delta<\delta_r$ on both sides\\
-Slab breakoff & trench $\to$ transform & arriving lithosphere has $\mathcal{N}\le0$\\
-Ridge death & ridge $\to$ transform & $v_o<v_r'$, or $\delta>\delta_r'$ at the seam\\
-Healing & transform $\to$ interior & $|\Delta\vect u|<v_h$ and integrity recovered above $s_{\mathrm{heal}}$\\
+Nucleation & interior $\to$ transform & integrity of the band across an edge below $s_{\mathrm{nuc}}$\\
+Healing & transform $\to$ interior & integrity back above $s_{\mathrm{heal}}$ and slip below $v_h$\\
+Subduction initiation & transform $\to$ trench & contact compression above $P_i$ and $\mathcal N>\mathcal N_i$ on the denser side, which subducts\\
+Rifting & transform $\to$ ridge & contact tension above $T_r$ and $\delta<\delta_r$ on both sides\\
+Breakoff & trench $\to$ transform & arriving lithosphere has $\mathcal N\le\mathcal N_b$; the slab is released\\
+Stall & trench $\to$ transform & convergence below $v_s$; the slab is released\\
+Ridge death & ridge $\to$ transform & opening below $v_s$\\
 \bottomrule
 \end{tabular}
 \end{center}
 
-At subduction initiation, the side with the larger $\mathcal N$ subducts. Each condition must hold for a persistence time before the event fires, and the thresholds for leaving a state differ from those for entering it ($v_r'<v_r$, $\delta_r'>\delta_r$, $s_{\mathrm{heal}}>s_{\mathrm{seam}}$), so that boundaries do not flicker. A ridge thus dies either because the plates stop separating or because the lithosphere at the axis has thickened. A trench lives only while it is fed with sinking lithosphere: when a continent or a young, buoyant ridge flank arrives, the slab detaches and the boundary carries on as a transform, which may later heal or, if dense lithosphere converges on it again, start a new trench.
+A transform is held shut by the contact penalty, so the normal force it carries, compression or tension, measures how it is loaded; that force decides whether it becomes a trench or a ridge. Each condition must hold for a persistence time before the event fires, and the thresholds for leaving a state lie beyond those for entering it ($s_{\mathrm{heal}}>s_{\mathrm{nuc}}$; a stalled trench converges more slowly than $P_i/\xi$, the rate at which the same load would restart it), so that boundaries do not flicker. A trench lives only while it is fed with sinking lithosphere: when a continent or a young, buoyant flank arrives, the slab detaches and the boundary carries on as a transform. If convergence continues and the lithosphere on the other side is dense, subduction restarts with the opposite polarity. A ridge that stops opening becomes a transform, which heals once its damage recovers.
+
+Nucleation depends on the mesh, because a continuum band cannot narrow below a cell. The resolution therefore sets how finely faults can branch, and is part of a world's character.
 
 Plates are not tracked as objects. A plate is a connected region bounded by seams; plates appear when seams link up into closed loops, and disappear when they are consumed or when the seams around them heal.
 
@@ -448,13 +457,14 @@ Since $\Delta Z_k/\ell_k=\Theta_{\mathrm{tr}}v_s\Delta t$, this is~\eqref{eq:sla
 
 \subsection{Seam events}
 \label{sec:events}
-The life-cycle conditions of Section~\ref{sec:lifecycle} are evaluated on triangle edges and seam edges after each step, using the column state of the copies on either side and the relative velocity at the edge midpoint. Each edge keeps a persistence clock per candidate event. Events change only which edges are seams, how markers are split into copies, and edge labels; they never change a stored integral except by moving it between copies of the same marker.
+The life-cycle conditions of Section~\ref{sec:lifecycle} are evaluated after each step on every seam edge and every interior edge, from the column state of the copies on either side and the velocity jump across the edge. Each edge keeps a persistence clock for its current candidate event. The seams are an explicit set of edges, so a seam may end inside a plate; its tip marker then has a single copy and the seam carries no jump there.
 \begin{itemize}
-\item \textbf{Opening a seam} along a chain of interior edges splits each marker on the chain into one copy per new sector. The marker's integrals are divided among its copies in proportion to the areas of their dual cells, which keeps the cell averages unchanged.
-\item \textbf{Healing} merges the copies of each marker on the chain into one, summing their integrals.
-\item \textbf{Changing type} relabels edges. A new trench face starts with an empty reservoir ($W=L=0$). At slab breakoff, $W$ and $L$ are released, and the released slab is recorded in the slab budget.
+\item \textbf{Nucleation and healing} add or remove seam edges. Markers are then split into copies afresh, one per sector between seam edges. Each old copy's integrals ($V$, $M$, $Z$, $S$, $W\ell$, $L\ell$) go to the new copies in proportion to the corner areas each inherits: healing sums copies, nucleation divides them by dual area, and cell averages are unchanged.
+\item \textbf{Changing type} relabels an edge. A new trench starts with an empty reservoir. At breakoff or stall, $W$ and $L$ of the subducting copies are released.
+\item \textbf{Trench polarity} is stored per edge relative to the edge's orientation, so that it survives renumbering and changes of plate.
+\item \textbf{Plates} are relabelled as the regions seams separate; labels serve only for display and for the coarse space of the solver.
 \end{itemize}
-Junctions need no special treatment: a marker where three or more seams meet simply has three or more copies. Seam edges become constraints of the triangulation at the next rebuild.
+Junctions need no special treatment in this bookkeeping: a marker where three or more seams meet simply has three or more copies. They do need it in mesh adaptation, where a sector can shrink to a single sliver triangle.
 
 \subsection{Adaptive insertion and deletion}
 \paragraph{Criteria.} A marker is flagged for refinement when $\sqrt{A_i}$ exceeds a fraction of the local feature scale, for example $\sqrt{A_i}|\vect{G}^h_i|/h_i>\tau_r$, $\sqrt{A_i}|\vect{G}^\Theta_i|/\Theta_i>\tau_r$, or $\sqrt{A_i}>\lambda\ell_{d,i}$. It is flagged for coarsening at a smaller threshold $\tau_c<\tau_r$. Neighbouring cell sizes are kept within a factor of about $1.5$, refinement is capped at $A_{\min}$, and seams are kept resolved more finely than the plate interiors around them.
@@ -699,7 +709,7 @@ Each test exercises a distinct component and has an exact or algebraic answer.
 \end{equation}
 so the plate reaches the terminal velocity this predicts when $\Gamma<1$, and accelerates without bound otherwise. Both regimes should be reproduced, and the approach to steady state should take a few $\tau_a$.
 
-\paragraph{8. Seam events.} Budgets close to round-off across every split, merge and relabelling. Two scenarios check the rules: a plate carrying a continent into a trench must lose its slab when the continent arrives, after which slab pull vanishes and the plate decelerates over a few $\tau_a$; and a plate pulled apart until its lithosphere thins must open a ridge where $\delta$ first falls below $\delta_r$.
+\paragraph{8. Seam events.} Budgets close to round-off across every nucleation, healing and relabelling, and a uniform state stays uniform when copies are split or merged. Scenarios check each rule: an idle transform heals; a seamless sheet under sustained shear nucleates transforms along the shear zone; a transform pushed shut between old and young lithosphere becomes a trench with the old side subducting; a transform pulled apart opens a ridge in thin lithosphere but not in thick; a ridge pushed shut becomes a transform; and a plate carrying a continent into a trench loses its slab when the continent arrives. Without an external push the plate then decelerates over a few $\tau_a$; with one, subduction may restart with the opposite polarity.
 
 \paragraph{9. Sensitivity.} Features reported as results must persist under resolution refinement, rebuild frequency, mesh-velocity parameters, adaptation thresholds, seam-event thresholds and persistence times, and comparison of GPU and reference implementations.
 
@@ -720,7 +730,7 @@ Mesh velocity and adaptation criteria & Method choices affecting accuracy, not c
 Integrity law, strength coefficients $B_c$, $B_l$ & Modelling choices requiring physical justification\\
 Slab reservoir ($\tau_a$, $\xi$, $L_{\max}$) & Modelling choice; calibrate against observed plate speeds and their correlation with trench length\\
 Strain localisation with damage & Mesh-dependent unless $G$ contains a physical length scale; adaptivity amplifies this\\
-Seam life cycle (nucleation, conversion, breakoff, healing) & Modelling choice: threshold rules with hysteresis and persistence times; where seams nucleate is mesh-dependent unless the thresholds are tied to physical length scales\\
+Seam life cycle (nucleation, conversion, breakoff, healing) & Modelling choice: switches between equivalent descriptions (seam $\leftrightarrow$ damaged band), with persistence times and hysteresis; nucleation is mesh-dependent, seam damage uses the physical fault-zone width $w_f$\\
 Thickness-dependent basal drag & Modelling choice; constrain $c_k$ and $m$ by the observed slowness of plates with large continental keels\\
 Planar geometry & Global models require markers on a sphere (whose convex hull is the Delaunay triangulation) with per-triangle tangent frames; flat triangles on a sphere then satisfy the geometric conservation law only approximately\\
 \bottomrule

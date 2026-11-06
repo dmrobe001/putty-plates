@@ -125,7 +125,7 @@ kbd { font-family: var(--font-data); font-size: 0.72rem; border: 1px solid var(-
   <div class="head">
     <div>
       <h1>Putty Plates</h1>
-      <div class="sub">Slice 4 · power-law plates with slab pull and damage</div>
+      <div class="sub">Slice 5 · seams that start, change and heal</div>
     </div>
     <span class="clock" id="clock">0 <small>Myr</small></span>
     <button id="toggle" aria-expanded="true">Hide</button>
@@ -223,6 +223,9 @@ kbd { font-family: var(--font-data); font-size: 0.72rem; border: 1px solid var(-
     <dt>Ridge · transform · trench</dt><dd id="sSeam">–</dd>
     <dt>Land above sea level</dt><dd id="sLand">–</dd>
     <dt>Speed median · max</dt><dd id="sSpeed">–</dd>
+    <dt>Seams nucleated · healed</dt><dd id="sEv1">–</dd>
+    <dt>Subduction starts · breakoffs · stalls</dt><dd id="sEv2">–</dd>
+    <dt>Rifts · ridge deaths</dt><dd id="sEv3">–</dd>
     <dt>Slab pull mean · max along trenches</dt><dd id="sSlab">–</dd>
     <dt>Solver iterations in passes · residual</dt><dd id="sSolve">–</dd>
     <dt>Crust created · subducted</dt><dd id="sFlux">–</dd>
@@ -253,7 +256,10 @@ kbd { font-family: var(--font-data); font-size: 0.72rem; border: 1px solid var(-
    Slab reservoir: W and L per subducting copy, slab pull and slab drag.
    Power-law creep (Picard, one pass per step after a converged first
    solve) and damage s weakening Ĥ and seam shear coupling.
-   Not yet from the document: seam life cycle, limited reconstruction (first-order upwind),
+   Seam life cycle: seams are the resolved limit of damaged bands
+   (C_t = Ĥ(s)/w); nucleation, healing, subduction initiation, breakoff,
+   stall, rifting and ridge death switch between equivalent descriptions.
+   Not yet from the document: limited reconstruction (first-order upwind),
    exact polygon-intersection remap (area-share remap instead), CDT
    rebuilds (local split/collapse/flip instead).
    Units: positions on the unit sphere (areas in sr, velocities in rad/Myr),
@@ -332,7 +338,11 @@ function triArea(X, a, b, c) {
    Markers m: position X[3m].
    Triangles t: markers T[3t+k], marker copies TC[3t+k], plate TP[t].
    Copies c: marker CM[c], plate CP[c], integrals V,M,Z,S, dual area A, velocity U.
-   Seam info (type, subducting plate) is keyed by marker pair and survives renumbering. */
+   Seams are an explicit set of edges, w.seamInfo, keyed by marker pair: { type, side, clock, pending }.
+   side (trenches) is the subducting side relative to the edge's orientation from the lower to the higher
+   marker index: 1 = the triangle containing that directed edge, 2 = the other. Plates are derived: the
+   regions that seams separate (a seam may also end inside a plate). */
+const isSeam = (w, a, b) => w.seamInfo.has(KEY(a, b));
 let W = null;
 
 // Topology derived from T alone: corner incidence, 1-ring neighbours, twin corners.
@@ -354,7 +364,7 @@ function deriveTopology(w) {
 
 // Everything that depends on copies: per-marker copy ranges, seams, dual areas.
 function deriveCopies(w) {
-  const nm = w.X.length / 3, T = w.T, TC = w.TC, TP = w.TP, nc = w.CM.length;
+  const nm = w.X.length / 3, T = w.T, TC = w.TC, nc = w.CM.length;
   const cOff = new Int32Array(nm + 1);
   for (let c = 0; c < nc; c++) cOff[w.CM[c] + 1]++;
   for (let m = 0; m < nm; m++) cOff[m + 1] += cOff[m];
@@ -362,12 +372,11 @@ function deriveCopies(w) {
   const sCount = new Int32Array(nm), sNb = new Int32Array(2 * nm).fill(-1), sEdge = new Int32Array(2 * nm).fill(-1), ovr = new Int32Array(nm).fill(-1);
   for (let i = 0; i < T.length; i++) {
     const t = (i / 3) | 0, a = T[i], b = T[3 * t + (i % 3 + 1) % 3]; if (a > b) continue;
-    const j = w.TN[i], t2 = (j / 3) | 0; if (TP[t] === TP[t2]) continue;
-    let info = w.seamInfo.get(KEY(a, b));
-    if (!info) { info = { type: TRANSFORM, sub: -1 }; w.seamInfo.set(KEY(a, b), info); }
+    const info = w.seamInfo.get(KEY(a, b)); if (!info) continue;
+    const j = w.TN[i], t2 = (j / 3) | 0;
     const a1 = TC[i], b1 = TC[3 * t + (i % 3 + 1) % 3], b2 = TC[j], a2 = TC[3 * t2 + (j % 3 + 1) % 3];
     const e = sA.length;
-    sA.push(a); sB.push(b); sC.push(a1, b1, a2, b2); sT.push(info.type); sSub.push(info.sub === TP[t] ? 1 : info.sub === TP[t2] ? 2 : 0);
+    sA.push(a); sB.push(b); sC.push(a1, b1, a2, b2); sT.push(info.type); sSub.push(info.type === TRENCH ? info.side || 0 : 0);
     for (const [m, o] of [[a, b], [b, a]]) { const k = sCount[m]++; if (k < 2) { sNb[2 * m + k] = o; sEdge[2 * m + k] = e; } }
     if (info.type === TRENCH && sSub[e]) { // overriding copy: the trench moves with it
       if (sSub[e] === 1) { ovr[a] = a2; ovr[b] = b2; } else { ovr[a] = a1; ovr[b] = b1; }
@@ -402,12 +411,13 @@ const RHEO = {
   D: 150,                    // compensation depth, km (differences in Φ do not depend on it)
   Bc: 1e26, Bl: 2e25,        // strength per km of crust and of thermal lithosphere (n = 1: Ĥ = ½ f(s)(Bc h + Bl δ)), N·s/m per km
   beta0: 1.5e14, ck: 3, H0: 150, mk: 3, // basal drag β = β0 [1 + ck (H/H0)^m], H = h + δ (eq. drag)
-  Cn_tf: 1e23, Ct_tf: 1e20,  // transform: stiff normal penalty, weak shear coupling
+  Cn_tf: 1e23,               // contact penalty: normal motion a seam cannot absorb
   tau_a: 5, xi: 2e22, Lmax: 0, // slab: assimilation time (Myr), mantle drag on the sinking slab (N·s/m²), optional input cutoff (km; 0 = off)
-  Cn_tr: 1e19, Ct_tr: 1e21,  // trench, converging: subduction takes up convergence; shear is a megathrust proxy
+  Cn_tr: 1e19,               // trench, converging: subduction takes up convergence (shear coupling C_t = Ĥ(s)/w for every seam)
                              // (an opening trench or a closing ridge uses the stiff Cn_tf: see seamContact)
   strength: 1,               // multiplier on Bc and Bl (UI)
   n: 3, edotRef: 1e-15, edotMin: 1e-17, // power-law creep (eq. visc): Bc, Bl give the strength at edotRef (1/s); edotMin caps the stiffness
+  wFault: 20, // km: width of the fault zone inside a seam, for its damage rate (a sub-grid length; the mechanical band is one cell)
   kd: 2, kh: 0.05, smin: 0.1, // damage G = −kd ε̇_E s + kh (1 − s), ε̇ in 1/Myr, kh in 1/Myr; f(s) = smin + (1 − smin) s
   tol: 1e-4, maxIter: 600, stepIter: 40, coarse: true, // PCG: relative residual, iterations for the first solve and per step after (warm-started)
   passes: 1, firstPasses: 30, picardTol: 1e-2 // Picard passes (viscosity and contact states) per step and for the first solve; relative velocity change to stop
@@ -494,7 +504,8 @@ function markerBlocks(w, P) {
 // Coarse space for a two-level preconditioner: the three rigid rotations of each plate. Plates are
 // stiff over the drag length, so their rotations are the slowest modes for a local preconditioner.
 function plateCoarse(w, P, E) {
-  const nc = w.CM.length, X = w.X, np = w.omega.length, n = 3 * np, Zc = new Float64Array(6 * nc);
+  let np = 0; for (let c = 0; c < w.CM.length; c++) np = Math.max(np, w.CP[c] + 1);
+  const nc = w.CM.length, X = w.X, n = 3 * np, Zc = new Float64Array(6 * nc);
   for (let c = 0; c < nc; c++) { const m = w.CM[c], x = X[3*m], y = X[3*m+1], z = X[3*m+2], o = 6 * m;
     // rotation about axis k: e_k × x, in the marker basis
     const r = [[0, -z, y], [z, 0, -x], [-y, x, 0]];
@@ -655,7 +666,7 @@ function solvePass(w, maxIter, stiff, edotT) { // edotT: strain rate per triangl
   for (let c = 0; c < nc; c++) { const k = 4 * P.mSlot[w.CM[c]][(c - w.cOff[w.CM[c]]) * (w.cOff[w.CM[c]+1] - w.cOff[w.CM[c]] + 1)];
     const b = dragBeta(h[c], th[c]) * w.A[c] * R_M * R_M; K[k] += b; K[k+3] += b; }
   // seams: pair coupling (eq. interface) lumped onto copy pairs, and the facing column's push on each face
-  const tlen = trenchLengths(w);
+  const tlen = trenchLengths(w), wband = w.L0 * R_M; // band width a seam stands for: one cell
   if (w.bodyForce) for (let c = 0; c < nc; c++) { // test hook: force per unit area, N/m², as a 3-vector
     const m = w.CM[c], o = 6 * m, f = w.bodyForce(X[3*m], X[3*m+1], X[3*m+2], w.CP[c]), a = w.A[c] * R_M * R_M;
     F[2*c] += a * (f[0]*E[o] + f[1]*E[o+1] + f[2]*E[o+2]); F[2*c+1] += a * (f[0]*E[o+3] + f[1]*E[o+4] + f[2]*E[o+5]); }
@@ -670,8 +681,21 @@ function solvePass(w, maxIter, stiff, edotT) { // edotT: strain rate per triangl
     const ell = 0.5 * len * R_M;
     for (const [k, m, p, q] of [[0, a, 0, 2], [1, b, 1, 3]]) {
       const st = stiff[2*e + k]; if (type === RIDGE && !st) continue;
-      const c1s = w.sC[4*e+p], c2s = w.sC[4*e+q], fsp = RHEO.smin + (1 - RHEO.smin) * 0.5 * (si[c1s] + si[c2s]); // shear coupling weakens with damage; the contact penalty does not
-      const Cn = st ? RHEO.Cn_tf : RHEO.Cn_tr, Ct = fsp * (type === TRANSFORM ? RHEO.Ct_tf : type === TRENCH ? RHEO.Ct_tr : 0);
+      // Shear coupling is the damaged band it stands for, one cell wide: C_t = Ĥ(s, ε̇)/w with ε̇ = slip/w.
+      // The contact penalty does not weaken with damage.
+      const c1s = w.sC[4*e+p], c2s = w.sC[4*e+q];
+      let Ct = 0;
+      if (type !== RIDGE) {
+        const fsp = RHEO.smin + (1 - RHEO.smin) * 0.5 * (si[c1s] + si[c2s]), Bp = RHEO.Bc * 0.5 * (h[c1s] + h[c2s]) + RHEO.Bl * thermalThickness(0.5 * (th[c1s] + th[c2s]));
+        let er = 1;
+        if (RHEO.n !== 1 && w.U && w.U.length === 3 * nc) {
+          const dx = w.U[3*c1s] - w.U[3*c2s], dy = w.U[3*c1s+1] - w.U[3*c2s+1], dz = w.U[3*c1s+2] - w.U[3*c2s+2];
+          const sl = type === TRENCH ? Math.hypot(dx, dy, dz) : Math.abs(dx*ex + dy*ey + dz*ez) / len; // rad/Myr
+          er = Math.pow(Math.max(sl / w.L0 / SEC_MYR, RHEO.edotMin) / RHEO.edotRef, 1 / RHEO.n - 1);
+        }
+        Ct = 0.5 * RHEO.strength * fsp * er * Bp / wband;
+      }
+      const Cn = st ? RHEO.Cn_tf : RHEO.Cn_tr;
       const o = 6 * m, n1 = nx*E[o] + ny*E[o+1] + nz*E[o+2], n2 = nx*E[o+3] + ny*E[o+4] + nz*E[o+5], nn = Math.hypot(n1, n2), u1 = n1 / nn, u2 = n2 / nn;
       const c00 = ell * (Cn*u1*u1 + Ct*u2*u2), c01 = ell * (Cn - Ct) * u1*u2, c11 = ell * (Cn*u2*u2 + Ct*u1*u1);
       for (let r = 0; r < 4; r++) { const sl = 4 * P.seamSlot[8*e + 4*k + r], sg = r === 1 || r === 2 ? -1 : 1; K[sl] += sg*c00; K[sl+1] += sg*c01; K[sl+2] += sg*c01; K[sl+3] += sg*c11; }
@@ -732,7 +756,8 @@ function compact(w) {
   }
   const info = new Map();
   for (const [key, v] of w.seamInfo) { const a = mMap[Math.floor(key / 1048576)], b = mMap[key % 1048576]; if (a >= 0 && b >= 0) info.set(KEY(a, b), v); }
-  Object.assign(w, nw, { X: Float64Array.from(X), T: Int32Array.from(T), TC: Int32Array.from(TC), TP: Int32Array.from(TP), seamInfo: info });
+  const nuc = new Map(); if (w.nuc) for (const [key, v] of w.nuc) { const a = mMap[Math.floor(key / 1048576)], b = mMap[key % 1048576]; if (a >= 0 && b >= 0) nuc.set(KEY(a, b), v); }
+  Object.assign(w, nw, { X: Float64Array.from(X), T: Int32Array.from(T), TC: Int32Array.from(TC), TP: Int32Array.from(TP), seamInfo: info, nuc });
   w.mDead = new Uint8Array(w.X.length / 3); w.cDead = new Uint8Array(w.CM.length); w.tDead = new Uint8Array(w.TP.length);
   deriveTopology(w); deriveCopies(w);
 }
@@ -792,7 +817,7 @@ function maintain(w) {
   {
     const nm = nm0;
     for (let m = 0; m < nm; m++) {
-      if (w.cOff[m + 1] - w.cOff[m] !== 1) continue; // interior markers only
+      if (w.cOff[m + 1] - w.cOff[m] !== 1 || w.sCount[m]) continue; // interior markers only (not seam tips)
       // trigger on the smallest altitude from m to an opposite edge (a marker can approach the middle
       // of an edge without any of its own edges getting short); collapse toward the nearer base vertex
       let best = Infinity, bj = -1;
@@ -810,7 +835,7 @@ function maintain(w) {
     }
     // chain markers: merge into a chain neighbour when a chain edge is short, or when an all-seam
     // triangle at this marker is thin (e.g. a closing wedge at a triple junction)
-    const isSeam = m => w.cOff[m + 1] - w.cOff[m] >= 2;
+    const isSeamMarker = m => w.cOff[m + 1] - w.cOff[m] >= 2;
     for (let m = 0; m < nm; m++) {
       if (w.cOff[m + 1] - w.cOff[m] !== 2 || w.sCount[m] !== 2) continue;
       const n1 = w.sNb[2*m], n2 = w.sNb[2*m+1];
@@ -819,7 +844,7 @@ function maintain(w) {
       if (Math.min(d1, d2) < 0.4 * L0) { scol.push([Math.min(d1, d2), m, d1 < d2 ? n1 : n2]); continue; }
       for (let p = w.incOff[m]; p < w.incOff[m + 1]; p++) {
         const t = (w.inc[p] / 3) | 0, v = [w.T[3*t], w.T[3*t+1], w.T[3*t+2]];
-        if (!v.every(isSeam)) continue;
+        if (!v.every(isSeamMarker)) continue;
         let alt = Infinity;
         for (let k = 0; k < 3; k++) { const a = v[k], b = v[(k+1)%3], c = v[(k+2)%3]; alt = Math.min(alt, 2 * triArea(X0, a, b, c) / Math.hypot(X0[3*b] - X0[3*c], X0[3*b+1] - X0[3*c+1], X0[3*b+2] - X0[3*c+2])); }
         if (alt < 0.3 * L0) { const j = v.includes(n1) ? n1 : v.includes(n2) ? n2 : -1; if (j >= 0) { scol.push([alt, m, j]); break; } }
@@ -827,7 +852,7 @@ function maintain(w) {
     }
     for (let i = 0; i < w.T.length; i++) {
       const t = (i / 3) | 0, a = w.T[i], b = w.T[3*t + (i % 3 + 1) % 3]; if (a > b) continue;
-      const j = w.TN[i], t2 = (j / 3) | 0; if (w.TP[t] !== w.TP[t2]) continue; // never split seam edges here
+      if (isSeam(w, a, b)) continue; // never split seam edges here
       const d = Math.hypot(X0[3*a] - X0[3*b], X0[3*a+1] - X0[3*b+1], X0[3*a+2] - X0[3*b+2]);
       if (d > 1.6 * w.L0 && !w.skip?.split) scand.push([d, i]);
     }
@@ -919,7 +944,7 @@ function maintain(w) {
         for (const cr of keep) { w.TC[cr] = map.get(w.TC[cr]); w.T[cr] = j; }
         for (const t of dying) w.tDead[t] = 1;
         const x = w.sNb[2*a] === j ? w.sNb[2*a+1] : w.sNb[2*a]; // the chain continues from j to x
-        const info = w.seamInfo.get(KEY(a, x)); if (info) w.seamInfo.set(KEY(j, x), info);
+        const info = w.seamInfo.get(KEY(a, x)); if (info) w.seamInfo.set(KEY(j, x), (a < x) === (j < x) ? info : { ...info, side: info.side ? 3 - info.side : 0 });
         w.seamInfo.delete(KEY(a, x)); w.seamInfo.delete(KEY(a, j));
         w.mDead[a] = 1;
         lock[a] = lock[j] = 1; for (let p = w.incOff[a]; p < w.incOff[a + 1]; p++) lock[w.nb[p]] = 1;
@@ -955,7 +980,7 @@ function maintain(w) {
     const X = w.X, nm = X.length / 3, lock = new Uint8Array(nm); let flips = 0;
     for (let i = 0; i < w.T.length; i++) {
       const t = (i / 3) | 0, k = i % 3, a = w.T[i], b = w.T[3*t + (k + 1) % 3]; if (a > b) continue;
-      const j = w.TN[i], t2 = (j / 3) | 0, k2 = j % 3; if (w.TP[t] !== w.TP[t2]) continue;
+      const j = w.TN[i], t2 = (j / 3) | 0, k2 = j % 3; if (isSeam(w, a, b)) continue;
       const c = w.T[3*t + (k + 2) % 3], d = w.T[3*t2 + (k2 + 2) % 3];
       if (lock[a] || lock[b] || lock[c] || lock[d] || c === d) continue;
       // d inside the circumcircle of (a,b,c) on the sphere ⇔ d lies on the far side of the plane through a,b,c
@@ -1013,11 +1038,12 @@ function makeWorld(params) {
   }
   w.seeds = seeds;
   deriveTopology(w);
+  for (let i = 0; i < w.T.length; i++) { const t = (i / 3) | 0, a = w.T[i], b = w.T[3*t + (i % 3 + 1) % 3]; if (w.TP[t] !== w.TP[(w.TN[i] / 3) | 0]) w.seamInfo.set(KEY(a, b), { type: TRANSFORM, side: 0 }); }
   // Copies: union corners of a marker that share a non-seam edge (one copy per angular sector).
   const n3 = 3 * nt, parent = new Int32Array(n3); for (let i = 0; i < n3; i++) parent[i] = i;
   const find = i => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
   for (let i = 0; i < n3; i++) {
-    const t = (i / 3) | 0, j = w.TN[i], t2 = (j / 3) | 0; if (w.TP[t] !== w.TP[t2]) continue;
+    const t = (i / 3) | 0, j = w.TN[i], t2 = (j / 3) | 0; if (isSeam(w, w.T[i], w.T[3*t + (i % 3 + 1) % 3])) continue;
     const ia = 3 * t2 + (j % 3 + 1) % 3; // corner of marker T[i] in the twin triangle
     const r1 = find(i), r2 = find(ia); if (r1 !== r2) parent[r1] = r2;
   }
@@ -1084,7 +1110,8 @@ function makeWorld(params) {
   for (let e = 0; e < types.length; e++) {
     const p1 = w.CP[w.sC[4*e]], p2 = w.CP[w.sC[4*e+2]], f1 = pc[p1] / pa[p1], f2 = pc[p2] / pa[p2];
     const sub = f1 < f2 ? p1 : f2 < f1 ? p2 : ((p1 * 31 + p2) % 2 ? p1 : p2);
-    w.seamInfo.set(KEY(w.sA[e], w.sB[e]), params.seamOf ? params.seamOf(p1, p2, ...[0, 1, 2].map(d => X[3*w.sA[e]+d] + X[3*w.sB[e]+d])) : { type: types[e], sub: types[e] === TRENCH ? sub : -1 });
+    const q = params.seamOf ? params.seamOf(p1, p2, ...[0, 1, 2].map(d => X[3*w.sA[e]+d] + X[3*w.sB[e]+d])) : { type: types[e], sub: types[e] === TRENCH ? sub : -1 };
+    w.seamInfo.set(KEY(w.sA[e], w.sB[e]), { type: q.type, side: q.type === TRENCH ? (q.sub === p1 ? 1 : q.sub === p2 ? 2 : 0) : 0 });
   }
   deriveCopies(w);
   // Initial heat deficit: half-space cooling at an age set by hop distance from the nearest ridge.
@@ -1097,10 +1124,11 @@ function makeWorld(params) {
     const tau = hop[m] < 0 ? 60 : hop[m] * w.L0 * R_KM / 25;
     let Th = isC ? PHYS.Theta_ss : Math.min(PHYS.Theta_ss, 2 * PHYS.dT * Math.sqrt(PHYS.kappa * tau / Math.PI));
     if (params.stateOf) ({ h, rho, Th } = params.stateOf(X[3*m], X[3*m+1], X[3*m+2], w.CP[c]));
-    w.V[c] = h * w.A[c]; w.M[c] = rho * h * w.A[c]; w.Z[c] = Th * w.A[c]; w.S[c] = h * w.A[c];
+    w.V[c] = h * w.A[c]; w.M[c] = rho * h * w.A[c]; w.Z[c] = Th * w.A[c]; w.S[c] = (w.sCount[m] ? LIFE.s0 : 1) * h * w.A[c]; // seams start as damaged bands
   }
   maintain(w); // a Delaunay clean-up after seam straightening (flips only change areas, never integrals)
   w.ops = { split: 0, collapse: 0, seam: 0, flip: 0 };
+  w.events = { nucleate: 0, heal: 0, subduct: 0, breakoff: 0, stall: 0, rift: 0, ridgeDeath: 0 }; w.nuc = new Map();
   const sum0 = k => w[k].reduce((s, v) => s + v, 0);
   w.budget = { V0: sum0('V'), M0: sum0('M'), Z0: sum0('Z'), Vc: 0, Mc: 0, Vs: 0, Ms: 0, Zs: 0, Zsrc: 0 };
   solveVelocity(w, RHEO.maxIter, RHEO.firstPasses);
@@ -1257,10 +1285,148 @@ function slabSources(w, dt, slabZ, slabA) {
 
 // Damage and healing (§1.8, Alg. 6): ds/dt = kh − (kd ε̇ + kh) s, integrated exactly over the step at
 // this step's strain rate; S = V s.
+// Strain rate inside a seam's fault zone, per copy: slip over the fault-zone width RHEO.wFault (1/Myr).
+// Once a seam exists, localization continues below the grid. Transforms count tangential slip,
+// trenches all relative motion; ridges none.
+function seamStrainRates(w) {
+  const X = w.X, U = w.U, out = new Float64Array(w.CM.length);
+  for (let e = 0; e < w.sA.length; e++) { const type = w.sT[e]; if (type === RIDGE) continue;
+    const a = w.sA[e], b = w.sB[e], ex = X[3*b] - X[3*a], ey = X[3*b+1] - X[3*a+1], ez = X[3*b+2] - X[3*a+2], l = Math.hypot(ex, ey, ez);
+    for (let k = 0; k < 2; k++) { const c1 = w.sC[4*e+k], c2 = w.sC[4*e+2+k]; if (c1 === c2) continue;
+      const dx = U[3*c1] - U[3*c2], dy = U[3*c1+1] - U[3*c2+1], dz = U[3*c1+2] - U[3*c2+2];
+      const r = (type === TRENCH ? Math.hypot(dx, dy, dz) : Math.abs(dx*ex + dy*ey + dz*ez) / l) * R_KM / RHEO.wFault;
+      if (r > out[c1]) out[c1] = r; if (r > out[c2]) out[c2] = r; } }
+  return out;
+}
+
 function damageSources(w, dt, edot) {
   for (let c = 0; c < w.CM.length; c++) { if (!(w.V[c] > 0)) continue;
     const s = Math.min(1, Math.max(0, w.S[c] / w.V[c])), r = RHEO.kd * edot[c] + RHEO.kh, seq = RHEO.kh / r;
     w.S[c] = w.V[c] * (seq + (s - seq) * Math.exp(-r * dt)); }
+}
+
+// ---------- seam life cycle (§1.10, §2.8 "Seam events") ----------
+// A seam is the resolved limit of a damaged band (C_t = Ĥ(s)/w). Damage decides where a seam exists;
+// motion and buoyancy decide its type. Each condition must hold for LIFE.tau before it fires.
+const LIFE = {
+  tau: 2,                  // persistence, Myr
+  s0: 0,                   // integrity of the initial seams (damaged bands)
+  sNuc: 0.15,              // an interior edge whose band integrity stays below this becomes a transform
+  sHeal: 0.85, slipHeal: 0.2, // a transform heals once integrity is back above sHeal and slip below slipHeal (cm/yr)
+  Non: 1500, Noff: 0,      // buoyancy 𝒩 (t/m²): subduction starts if the denser side exceeds Non; a slab breaks off once arriving 𝒩 ≤ Noff
+  Pinit: 5e11, Trift: 5e11, // normal force across a transform (N/m): compression to start subduction, tension to rift
+  deltaRift: 40,           // km: rifting needs thermal lithosphere thinner than this on both sides
+  vStall: 0.05             // cm/yr: a trench converging slower than this becomes a transform; a ridge opening slower than this dies.
+                           // Below P_init/ξ ≈ 0.08 cm/yr, so a stalled trench does not immediately qualify to restart.
+};
+// Net negative buoyancy per unit area, eq. (buoy), in t/m² (kg/m³ × km): positive sinks.
+const buoyancy = (h, rho, Th) => PHYS.rho_m * PHYS.alpha * Th - h * (PHYS.rho_m - rho);
+
+function seamEvents(w, dt) {
+  const nc = w.CM.length, X = w.X, U = w.U, cmyr = R_KM / 10, toSI = R_M / SEC_MYR;
+  const N = new Float64Array(nc), dl = new Float64Array(nc), si = new Float64Array(nc);
+  for (let c = 0; c < nc; c++) { const A = w.A[c], h = w.V[c] / A, th = Math.max(0, w.Z[c] / A), rho = w.V[c] > 0 ? w.M[c] / w.V[c] : PHYS.rho_oc;
+    N[c] = buoyancy(h, rho, th); dl[c] = thermalThickness(th); si[c] = w.V[c] > 0 ? w.S[c] / w.V[c] : 1; }
+  const due = (info, ev) => { if (info.pending === ev) info.clock += dt; else { info.pending = ev; info.clock = dt; } return info.clock >= LIFE.tau; };
+  const fired = [];
+  for (let e = 0; e < w.sA.length; e++) {
+    const a = w.sA[e], b = w.sB[e], key = KEY(a, b), info = w.seamInfo.get(key), type = w.sT[e];
+    const p = [w.sC[4*e], w.sC[4*e+1]], q = [w.sC[4*e+2], w.sC[4*e+3]];
+    const mx = X[3*a] + X[3*b], my = X[3*a+1] + X[3*b+1], mz = X[3*a+2] + X[3*b+2], ex = X[3*b] - X[3*a], ey = X[3*b+1] - X[3*a+1], ez = X[3*b+2] - X[3*a+2], l = Math.hypot(ex, ey, ez);
+    let nx = ey*mz - ez*my, ny = ez*mx - ex*mz, nz = ex*my - ey*mx; const nl = Math.hypot(nx, ny, nz); nx /= nl; ny /= nl; nz /= nl; // side 1 → side 2
+    let closing = 0, slip = 0;
+    for (let k = 0; k < 2; k++) { const dx = U[3*p[k]] - U[3*q[k]], dy = U[3*p[k]+1] - U[3*q[k]+1], dz = U[3*p[k]+2] - U[3*q[k]+2];
+      closing += 0.5 * (dx*nx + dy*ny + dz*nz); slip += 0.5 * Math.abs(dx*ex + dy*ey + dz*ez) / l; } // rad/Myr
+    const N1 = 0.5 * (N[p[0]] + N[p[1]]), N2 = 0.5 * (N[q[0]] + N[q[1]]), d1 = 0.5 * (dl[p[0]] + dl[p[1]]), d2 = 0.5 * (dl[q[0]] + dl[q[1]]);
+    const sbar = 0.25 * (si[p[0]] + si[p[1]] + si[q[0]] + si[q[1]]);
+    let ev = null;
+    if (type === TRENCH) {
+      const Nsub = info.side === 2 ? N2 : N1;
+      if (Nsub <= LIFE.Noff) ev = 'breakoff'; else if (closing * cmyr < LIFE.vStall) ev = 'stall';
+    } else if (type === RIDGE) {
+      if (-closing * cmyr < LIFE.vStall) ev = 'ridgeDeath';
+    } else {
+      const P = RHEO.Cn_tf * closing * toSI; // compression positive (the contact penalty holds the faces together)
+      if (P > LIFE.Pinit && Math.max(N1, N2) > LIFE.Non) ev = 'subduct';
+      else if (-P > LIFE.Trift && Math.max(d1, d2) < LIFE.deltaRift) ev = 'rift';
+      else if (sbar >= LIFE.sHeal && slip * cmyr < LIFE.slipHeal) ev = 'heal';
+    }
+    if (!ev) { info.pending = null; info.clock = 0; continue; }
+    if (due(info, ev)) fired.push({ key, info, ev, e, side: N1 >= N2 ? 1 : 2 });
+  }
+  // nucleation: interior edges whose band (the two end copies) is damaged enough to be a seam
+  const nuc = new Map();
+  for (let i = 0; i < w.T.length; i++) {
+    const t = (i / 3) | 0, a = w.T[i], b = w.T[3*t + (i % 3 + 1) % 3]; if (a > b || isSeam(w, a, b)) continue;
+    if (0.5 * (si[w.TC[i]] + si[w.TC[3*t + (i % 3 + 1) % 3]]) >= LIFE.sNuc) continue;
+    const key = KEY(a, b), clock = (w.nuc.get(key) || 0) + dt;
+    if (clock >= LIFE.tau) fired.push({ key, ev: 'nucleate' }); else nuc.set(key, clock);
+  }
+  w.nuc = nuc;
+  if (!fired.length) return;
+  let topo = false;
+  for (const f of fired) {
+    w.events[f.ev]++;
+    if (f.ev === 'nucleate') { w.seamInfo.set(f.key, { type: TRANSFORM, side: 0 }); topo = true; continue; }
+    if (f.ev === 'heal') { w.seamInfo.delete(f.key); topo = true; continue; }
+    const info = f.info; info.pending = null; info.clock = 0;
+    if (f.ev === 'breakoff' || f.ev === 'stall') { // the slab is released to the mantle and stops pulling
+      const o = info.side === 2 ? 2 : 0;
+      for (const c of [w.sC[4*f.e + o], w.sC[4*f.e + o + 1]]) { w.Wl[c] = 0; w.Ll[c] = 0; }
+      info.type = TRANSFORM; info.side = 0;
+    } else if (f.ev === 'ridgeDeath') info.type = TRANSFORM;
+    else if (f.ev === 'subduct') { info.type = TRENCH; info.side = f.side; }
+    else if (f.ev === 'rift') info.type = RIDGE;
+  }
+  if (topo) rebuildCopies(w); else deriveCopies(w);
+}
+
+// Plates are the regions seams separate. Keep labels stable: each region takes its majority old label
+// unless a larger region already took it.
+function relabelPlates(w) {
+  const nt = w.TP.length, comp = new Int32Array(nt).fill(-1), comps = [];
+  for (let t0 = 0; t0 < nt; t0++) { if (comp[t0] >= 0) continue;
+    const id = comps.length, list = [t0]; comp[t0] = id;
+    for (let k = 0; k < list.length; k++) { const t = list[k];
+      for (let r = 0; r < 3; r++) { const i = 3*t + r, a = w.T[i], b = w.T[3*t + (r + 1) % 3], t2 = (w.TN[i] / 3) | 0;
+        if (comp[t2] < 0 && !isSeam(w, a, b)) { comp[t2] = id; list.push(t2); } } }
+    comps.push(list); }
+  const used = new Set(), label = new Int32Array(comps.length);
+  let next = 0; for (let t = 0; t < nt; t++) next = Math.max(next, w.TP[t] + 1);
+  [...comps.keys()].sort((x, y) => comps[y].length - comps[x].length).forEach(id => {
+    const cnt = new Map(); for (const t of comps[id]) cnt.set(w.TP[t], (cnt.get(w.TP[t]) || 0) + 1);
+    let best = -1, bc = -1; for (const [k, v] of cnt) if (v > bc && !used.has(k)) { best = k; bc = v; }
+    label[id] = best >= 0 ? best : next++; used.add(label[id]); });
+  for (let t = 0; t < nt; t++) w.TP[t] = label[comp[t]];
+  while (w.omega.length < next) w.omega.push([0, 0, 0]);
+}
+
+// Re-split markers into copies after the seam set changed (Alg. 1: assign copies to sectors). Each old
+// copy's integrals go to the new copies in proportion to the corner areas each inherits: healing sums
+// copies, nucleation splits them by dual area. Totals are unchanged; a uniform state stays uniform.
+function rebuildCopies(w) {
+  relabelPlates(w);
+  const T = w.T, n3 = T.length, X = w.X, nm = X.length / 3, parent = new Int32Array(n3);
+  for (let i = 0; i < n3; i++) parent[i] = i;
+  const find = i => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+  for (let i = 0; i < n3; i++) { const t = (i / 3) | 0, j = w.TN[i], t2 = (j / 3) | 0; if (isSeam(w, T[i], T[3*t + (i % 3 + 1) % 3])) continue;
+    const r1 = find(i), r2 = find(3 * t2 + (j % 3 + 1) % 3); if (r1 !== r2) parent[r1] = r2; }
+  const rootId = new Int32Array(n3).fill(-1), CM = [], CP = [], TC = new Int32Array(n3);
+  for (let m = 0; m < nm; m++) for (let p = w.incOff[m]; p < w.incOff[m + 1]; p++) {
+    const cr = w.inc[p], r = find(cr);
+    if (rootId[r] < 0) { rootId[r] = CM.length; CM.push(m); CP.push(w.TP[(cr / 3) | 0]); }
+    TC[cr] = rootId[r]; }
+  const ncOld = w.CM.length, ncNew = CM.length, a3 = new Float64Array(n3), Aold = new Float64Array(ncOld), Anew = new Float64Array(ncNew);
+  for (let t = 0; t < n3 / 3; t++) { const a = sphArea(X, T[3*t], T[3*t+1], T[3*t+2]) / 3; for (let k = 0; k < 3; k++) { a3[3*t+k] = a; Aold[w.TC[3*t+k]] += a; Anew[TC[3*t+k]] += a; } }
+  for (const key of ['V', 'M', 'Z', 'S', 'Wl', 'Ll']) {
+    const old = w[key], nw = new Float64Array(ncNew);
+    for (let cr = 0; cr < n3; cr++) nw[TC[cr]] += old[w.TC[cr]] * a3[cr] / Aold[w.TC[cr]];
+    w[key] = nw; }
+  const Un = new Float64Array(3 * ncNew);
+  for (let cr = 0; cr < n3; cr++) { const o = w.TC[cr], n = TC[cr]; for (let d = 0; d < 3; d++) Un[3*n+d] += w.U[3*o+d] * a3[cr]; }
+  for (let c = 0; c < ncNew; c++) for (let d = 0; d < 3; d++) Un[3*c+d] /= Anew[c];
+  Object.assign(w, { TC, CM: Int32Array.from(CM), CP: Int32Array.from(CP), U: Un, cDead: new Uint8Array(ncNew) });
+  deriveCopies(w);
 }
 
 function step(w, dtWant, retry = true) {
@@ -1289,7 +1455,8 @@ function step(w, dtWant, retry = true) {
       const Zn = A * th2; B.Zsrc += Zn - w.Z[c]; w.Z[c] = Zn;
     }
     slabSources(w, dt, F.slabZ, F.slabA);
-    if (!w.noDamage) damageSources(w, dt, copyStrainRates(w, w.U));
+    if (!w.noDamage) { const ec = copyStrainRates(w, w.U), es = seamStrainRates(w); for (let c = 0; c < ec.length; c++) ec[c] = Math.max(ec[c], es[c]); damageSources(w, dt, ec); }
+    if (!w.noEvents) seamEvents(w, dt);
     w.t += dt;
     return dt;
   }
@@ -1551,7 +1718,7 @@ function drawLegend() {
   else if (view.mode === 'speed') bar(speedRamp, 0, 12, ['0', '6', '12 cm/yr'], 'Speed |u| from the force balance');
   else if (view.mode === 'damage') bar(damageRamp, 0, 1, ['0 damaged', '0.5', '1 intact'], 'Integrity s (damage weakens strength and seam shear coupling)');
   else if (view.mode === 'strain') bar(strainRamp, -4, -1, ['10⁻⁴', '10⁻²·⁵', '10⁻¹ /Myr'], 'Effective strain rate ε̇_E');
-  else L.innerHTML = `<span>Seams (fixed type for the run)</span><div class="keys"><span>${sw(SEAMRGB[0])}ridge</span><span>${sw(SEAMRGB[1])}transform</span><span>${sw(SEAMRGB[2])}trench</span></div><span class="helptext">Plate fill is lighter where crust is continental.</span>`;
+  else L.innerHTML = `<span>Seams (edges change type, open and heal)</span><div class="keys"><span>${sw(SEAMRGB[0])}ridge</span><span>${sw(SEAMRGB[1])}transform</span><span>${sw(SEAMRGB[2])}trench</span></div><span class="helptext">Plate fill is lighter where crust is continental.</span>`;
 }
 
 function refreshStats(land) {
@@ -1567,6 +1734,7 @@ function refreshStats(land) {
     $('sSpeed').textContent = `${sp[sp.length >> 1].toFixed(1)} · ${sp[sp.length - 1].toFixed(1)} cm/yr`; }
   { const tl = trenchLengths(w); let s = 0, l = 0, mx = 0; for (let c = 0; c < w.CM.length; c++) if (tl[c] > 0) { s += w.Wl[c]; l += tl[c]; mx = Math.max(mx, w.Wl[c] / tl[c]); }
     $('sSlab').textContent = l > 0 ? `${(s / l / 1e12).toFixed(1)} · ${(mx / 1e12).toFixed(1)} TN/m` : '–'; }
+  if (w.events) { const E = w.events; $('sEv1').textContent = `${E.nucleate} · ${E.heal}`; $('sEv2').textContent = `${E.subduct} · ${E.breakoff} · ${E.stall}`; $('sEv3').textContent = `${E.rift} · ${E.ridgeDeath}`; }
   $('sSolve').textContent = w.solve ? `${w.solve.iters} in ${w.solve.passes} · ${w.solve.residual.toExponential(0)}` : '–';
   $('sFlux').textContent = `${(B.Vc * km3).toFixed(1)} · ${(B.Vs * km3).toFixed(1)} M km³`;
   const eV = (sum('V') - (B.V0 + B.Vc - B.Vs)) / B.V0, eM = (sum('M') - (B.M0 + B.Mc - B.Ms)) / B.M0, eZ = (sum('Z') - (B.Z0 + B.Zsrc - B.Zs)) / B.Z0;
