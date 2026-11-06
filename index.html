@@ -125,7 +125,7 @@ kbd { font-family: var(--font-data); font-size: 0.72rem; border: 1px solid var(-
   <div class="head">
     <div>
       <h1>Putty Plates</h1>
-      <div class="sub">Slice 2 · force balance, linear viscous sheet</div>
+      <div class="sub">Slice 3 · force balance with slab pull</div>
     </div>
     <span class="clock" id="clock">0 <small>Myr</small></span>
     <button id="toggle" aria-expanded="true">Hide</button>
@@ -175,6 +175,11 @@ kbd { font-family: var(--font-data); font-size: 0.72rem; border: 1px solid var(-
       <input type="range" id="ck" min="0" max="10" step="0.1" value="3">
       <span class="hint">β = β₀ [1 + c<sub>k</sub> (H/H₀)³], H = crust + thermal lithosphere</span>
     </div>
+    <div class="ctl">
+      <div class="top"><label class="name" for="ta">Slab assimilation τ<sub>a</sub></label><span class="val" id="taVal"></span></div>
+      <input type="range" id="ta" min="1" max="20" step="0.5" value="5">
+      <span class="hint" id="taHint"></span>
+    </div>
   </div>
 
   <div class="group">
@@ -212,6 +217,7 @@ kbd { font-family: var(--font-data); font-size: 0.72rem; border: 1px solid var(-
     <dt>Ridge · transform · trench</dt><dd id="sSeam">–</dd>
     <dt>Land above sea level</dt><dd id="sLand">–</dd>
     <dt>Speed median · max</dt><dd id="sSpeed">–</dd>
+    <dt>Slab pull mean · max along trenches</dt><dd id="sSlab">–</dd>
     <dt>Solver iterations in passes · residual</dt><dd id="sSolve">–</dd>
     <dt>Crust created · subducted</dt><dd id="sFlux">–</dd>
     <dt>Budget error V · M · Z</dt><dd id="sBudget">–</dd>
@@ -238,8 +244,9 @@ kbd { font-family: var(--font-data); font-size: 0.72rem; border: 1px solid var(-
    Velocity solves (K + Mβ) u = F each step: P1 elements in each
    triangle's tangent plane, buoyancy load from the GPE (gravitational
    potential energy) Φ, thickness-dependent drag, seam pair coupling.
-   Not yet from the document: power-law creep (n = 1 here), slab
-   reservoir, seam life cycle, limited reconstruction (first-order upwind),
+   Slab reservoir: W and L per subducting copy, slab pull and slab drag.
+   Not yet from the document: power-law creep (n = 1 here), damage,
+   seam life cycle, limited reconstruction (first-order upwind),
    exact polygon-intersection remap (area-share remap instead), CDT
    rebuilds (local split/collapse/flip instead).
    Units: positions on the unit sphere (areas in sr, velocities in rad/Myr),
@@ -389,6 +396,7 @@ const RHEO = {
   Bc: 1e26, Bl: 2e25,        // strength per km of crust and of thermal lithosphere (n = 1: Ĥ = ½ f(s)(Bc h + Bl δ)), N·s/m per km
   beta0: 1.5e14, ck: 3, H0: 150, mk: 3, // basal drag β = β0 [1 + ck (H/H0)^m], H = h + δ (eq. drag)
   Cn_tf: 1e23, Ct_tf: 1e20,  // transform: stiff normal penalty, weak shear coupling
+  tau_a: 5, xi: 2e22, Lmax: 0, // slab: assimilation time (Myr), mantle drag on the sinking slab (N·s/m²), optional input cutoff (km; 0 = off)
   Cn_tr: 1e19, Ct_tr: 1e21,  // trench, converging: subduction takes up convergence; shear is a megathrust proxy
                              // (an opening trench or a closing ridge uses the stiff Cn_tf: see seamContact)
   strength: 1,               // multiplier on Bc and Bl (UI)
@@ -538,6 +546,16 @@ function strainRates(w, U) {
   return out;
 }
 
+// Trench length share of each subducting copy (half of each adjacent trench edge on its side), in m,
+// and the reservoir's line density W = ∫W dℓ / ℓ for that copy.
+function trenchLengths(w) {
+  const X = w.X, len = new Float64Array(w.CM.length);
+  for (let e = 0; e < w.sA.length; e++) { if (w.sT[e] !== TRENCH || !w.sSub[e]) continue;
+    const a = w.sA[e], b = w.sB[e], l = 0.5 * Math.hypot(X[3*b] - X[3*a], X[3*b+1] - X[3*a+1], X[3*b+2] - X[3*a+2]) * R_M, o = w.sSub[e] === 1 ? 0 : 2;
+    len[w.sC[4*e + o]] += l; len[w.sC[4*e + o + 1]] += l; }
+  return len;
+}
+
 // Normal contact state of each seam copy pair, from the current velocity. A seam absorbs normal
 // motion in one direction only: a trench consumes convergence, a ridge fills opening. Motion in the
 // other direction is resisted like intact material (stiff C_n). Transforms absorb neither.
@@ -612,6 +630,7 @@ function solvePass(w, maxIter, stiff) {
   for (let c = 0; c < nc; c++) { const k = 4 * P.mSlot[w.CM[c]][(c - w.cOff[w.CM[c]]) * (w.cOff[w.CM[c]+1] - w.cOff[w.CM[c]] + 1)];
     const b = dragBeta(h[c], th[c]) * w.A[c] * R_M * R_M; K[k] += b; K[k+3] += b; }
   // seams: pair coupling (eq. interface) lumped onto copy pairs, and the facing column's push on each face
+  const tlen = trenchLengths(w);
   if (w.bodyForce) for (let c = 0; c < nc; c++) { // test hook: force per unit area, N/m², as a 3-vector
     const m = w.CM[c], o = 6 * m, f = w.bodyForce(X[3*m], X[3*m+1], X[3*m+2], w.CP[c]), a = w.A[c] * R_M * R_M;
     F[2*c] += a * (f[0]*E[o] + f[1]*E[o+1] + f[2]*E[o+2]); F[2*c+1] += a * (f[0]*E[o+3] + f[1]*E[o+4] + f[2]*E[o+5]); }
@@ -633,6 +652,12 @@ function solvePass(w, maxIter, stiff) {
       const c1 = w.sC[4*e+p], c2 = w.sC[4*e+q];
       F[2*c1] -= ell * pt[c2] * u1; F[2*c1+1] -= ell * pt[c2] * u2;   // side 2 pushes side 1 back across n
       F[2*c2] += ell * pt[c1] * u1; F[2*c2+1] += ell * pt[c1] * u2;
+      if (type === TRENCH && w.sSub[e]) { // slab pull W and mantle drag ξ on the subducting copy, along n from subducting to overriding (eq. slabforce)
+        const sub = w.sSub[e] === 1, cs = sub ? c1 : c2, sg = sub ? 1 : -1, Wd = tlen[cs] > 0 ? w.Wl[cs] / tlen[cs] : 0;
+        F[2*cs] += ell * Wd * sg * u1; F[2*cs+1] += ell * Wd * sg * u2;
+        const sl = 4 * P.seamSlot[8*e + 4*k + (sub ? 0 : 3)], xi = ell * RHEO.xi;
+        K[sl] += xi * u1 * u1; K[sl+1] += xi * u1 * u2; K[sl+2] += xi * u1 * u2; K[sl+3] += xi * u2 * u2;
+      }
     }
   }
   // PCG, warm-started from the previous velocity projected onto the current bases
@@ -672,7 +697,7 @@ function compact(w) {
   order.sort((p, q) => mMap[w.CM[p]] - mMap[w.CM[q]] || p - q);
   const cMap = new Int32Array(w.CM.length).fill(-1); order.forEach((c, i) => { cMap[c] = i; });
   const pick = arr => Float64Array.from(order, c => arr[c]);
-  const nw = { CM: Int32Array.from(order, c => mMap[w.CM[c]]), CP: Int32Array.from(order, c => w.CP[c]), V: pick(w.V), M: pick(w.M), Z: pick(w.Z), S: pick(w.S) };
+  const nw = { CM: Int32Array.from(order, c => mMap[w.CM[c]]), CP: Int32Array.from(order, c => w.CP[c]), V: pick(w.V), M: pick(w.M), Z: pick(w.Z), S: pick(w.S), Wl: pick(w.Wl), Ll: pick(w.Ll) };
   if (w.U) nw.U = Float64Array.from({ length: 3 * order.length }, (_, i) => w.U[3 * order[(i / 3) | 0] + i % 3]); // warm start for the velocity solve
   const T = [], TC = [], TP = [];
   for (let t = 0; t < w.TP.length; t++) if (!w.tDead[t]) {
@@ -687,7 +712,7 @@ function compact(w) {
 }
 // Growable views for one maintenance pass (typed arrays → plain arrays, appended to freely).
 function openForEdit(w) {
-  for (const k of ['X', 'T', 'TC', 'TP', 'CM', 'CP', 'V', 'M', 'Z', 'S', 'U']) w[k] = Array.from(w[k]);
+  for (const k of ['X', 'T', 'TC', 'TP', 'CM', 'CP', 'V', 'M', 'Z', 'S', 'U', 'Wl', 'Ll']) w[k] = Array.from(w[k]);
   w.mDead = Array.from(w.mDead); w.cDead = Array.from(w.cDead); w.tDead = Array.from(w.tDead);
 }
 
@@ -820,7 +845,7 @@ function maintain(w) {
         if (!remapPatch(w, oldT, newT, new Set([ci]))) return false;
         for (const cr of keep) { w.T[cr] = j; w.TC[cr] = cj; }
         for (const t of dying) w.tDead[t] = 1;
-        w.mDead[i] = 1; w.cDead[ci] = 1;
+        w.mDead[i] = 1; w.cDead[ci] = 1; w.Wl[cj] += w.Wl[ci]; w.Ll[cj] += w.Ll[ci];
         lock[i] = lock[j] = 1; for (let p = w.incOff[i]; p < w.incOff[i + 1]; p++) lock[w.nb[p]] = 1;
         ops++; w.ops.collapse++;
         return true;
@@ -864,7 +889,7 @@ function maintain(w) {
           for (const [ca, sd] of order) { if (!remapPatch(w, sd.oldT, sd.newT, new Set([ca]), xfer)) { ok = false; break; } xfer.give = 0; }
         }
         if (!ok) { for (const [c, V, M, Z, S] of snap) { w.V[c] = V; w.M[c] = M; w.Z[c] = Z; w.S[c] = S; } continue; }
-        for (const ca of map.keys()) w.cDead[ca] = 1;
+        for (const [ca, cj] of map) { w.Wl[cj] += w.Wl[ca]; w.Ll[cj] += w.Ll[ca]; w.Wl[ca] = w.Ll[ca] = 0; w.cDead[ca] = 1; } // the slab reservoir moves along the trench with the merge
         for (const cr of keep) { w.TC[cr] = map.get(w.TC[cr]); w.T[cr] = j; }
         for (const t of dying) w.tDead[t] = 1;
         const x = w.sNb[2*a] === j ? w.sNb[2*a+1] : w.sNb[2*a]; // the chain continues from j to x
@@ -886,10 +911,10 @@ function maintain(w) {
         let px = w.X[3*a] + w.X[3*b], py = w.X[3*a+1] + w.X[3*b+1], pz = w.X[3*a+2] + w.X[3*b+2]; const l = Math.hypot(px, py, pz);
         w.X.push(px / l, py / l, pz / l); w.mDead.push(0);
         const cn = w.CM.length; w.CM.push(n); w.CP.push(w.TP[t]); w.V.push(0); w.M.push(0); w.Z.push(0); w.S.push(0); w.cDead.push(0);
-        w.U.push(0.5 * (w.U[3*ca] + w.U[3*cb]), 0.5 * (w.U[3*ca+1] + w.U[3*cb+1]), 0.5 * (w.U[3*ca+2] + w.U[3*cb+2]));
+        w.U.push(0.5 * (w.U[3*ca] + w.U[3*cb]), 0.5 * (w.U[3*ca+1] + w.U[3*cb+1]), 0.5 * (w.U[3*ca+2] + w.U[3*cb+2])); w.Wl.push(0); w.Ll.push(0);
         const tris = [[a, n, c, ca, cn, cc], [n, b, c, cn, cb, cc], [b, n, d, cb, cn, cd], [n, a, d, cn, ca, cd]];
-        if (tris.some(q => orient(w.X, q[0], q[1], q[2]) <= 0 || triArea(w.X, q[0], q[1], q[2]) < aMin)) { w.X.length -= 3; w.mDead.pop(); w.CM.pop(); w.CP.pop(); w.V.pop(); w.M.pop(); w.Z.pop(); w.S.pop(); w.cDead.pop(); w.U.length -= 3; continue; }
-        if (!remapPatch(w, [triRec(w, t), triRec(w, t2)], tris, new Set())) { w.X.length -= 3; w.mDead.pop(); w.CM.pop(); w.CP.pop(); w.V.pop(); w.M.pop(); w.Z.pop(); w.S.pop(); w.cDead.pop(); w.U.length -= 3; continue; }
+        if (tris.some(q => orient(w.X, q[0], q[1], q[2]) <= 0 || triArea(w.X, q[0], q[1], q[2]) < aMin)) { w.X.length -= 3; w.mDead.pop(); w.CM.pop(); w.CP.pop(); w.V.pop(); w.M.pop(); w.Z.pop(); w.S.pop(); w.cDead.pop(); w.U.length -= 3; w.Wl.pop(); w.Ll.pop(); continue; }
+        if (!remapPatch(w, [triRec(w, t), triRec(w, t2)], tris, new Set())) { w.X.length -= 3; w.mDead.pop(); w.CM.pop(); w.CP.pop(); w.V.pop(); w.M.pop(); w.Z.pop(); w.S.pop(); w.cDead.pop(); w.U.length -= 3; w.Wl.pop(); w.Ll.pop(); continue; }
         const put = (tt, q) => { for (let r = 0; r < 3; r++) { w.T[3*tt+r] = q[r]; w.TC[3*tt+r] = q[3+r]; } };
         put(t, tris[0]); put(t2, tris[2]);
         for (const q of [tris[1], tris[3]]) { const tt = w.TP.length; w.TP.push(w.TP[t]); w.tDead.push(0); w.T.push(0, 0, 0); w.TC.push(0, 0, 0); put(tt, q); }
@@ -980,6 +1005,7 @@ function makeWorld(params) {
   w.CM = Int32Array.from(CM); w.CP = Int32Array.from(CP);
   const nc = CM.length;
   w.V = new Float64Array(nc); w.M = new Float64Array(nc); w.Z = new Float64Array(nc); w.S = new Float64Array(nc); w.U = new Float64Array(3 * nc);
+  w.Wl = new Float64Array(nc); w.Ll = new Float64Array(nc); // slab reservoir per subducting copy: ∫W dℓ (N) and ∫L dℓ (m²)
   w.mDead = new Uint8Array(nm); w.cDead = new Uint8Array(nc); w.tDead = new Uint8Array(nt);
   deriveCopies(w);
   // Mean edge length sets the target spacing for maintenance.
@@ -1032,7 +1058,7 @@ function makeWorld(params) {
   for (let e = 0; e < types.length; e++) {
     const p1 = w.CP[w.sC[4*e]], p2 = w.CP[w.sC[4*e+2]], f1 = pc[p1] / pa[p1], f2 = pc[p2] / pa[p2];
     const sub = f1 < f2 ? p1 : f2 < f1 ? p2 : ((p1 * 31 + p2) % 2 ? p1 : p2);
-    w.seamInfo.set(KEY(w.sA[e], w.sB[e]), params.seamOf ? params.seamOf(p1, p2) : { type: types[e], sub: types[e] === TRENCH ? sub : -1 });
+    w.seamInfo.set(KEY(w.sA[e], w.sB[e]), params.seamOf ? params.seamOf(p1, p2, ...[0, 1, 2].map(d => X[3*w.sA[e]+d] + X[3*w.sB[e]+d])) : { type: types[e], sub: types[e] === TRENCH ? sub : -1 });
   }
   deriveCopies(w);
   // Initial heat deficit: half-space cooling at an age set by hop distance from the nearest ridge.
@@ -1124,6 +1150,7 @@ function moved(X, Wm, s) { // positions advanced by s·w, back on the sphere
 function fluxes(w, dt, Xh, Wm) {
   const nc = w.CM.length, T = w.T, TC = w.TC, U = w.U;
   const dV = new Float64Array(nc), dM = new Float64Array(nc), dZ = new Float64Array(nc), dS = new Float64Array(nc);
+  const slabZ = new Float64Array(nc), slabA = new Float64Array(nc); // heat deficit and lithosphere area sent down by each subducting copy
   const h = new Float64Array(nc), rho = new Float64Array(nc), th = new Float64Array(nc), sI = new Float64Array(nc);
   for (let c = 0; c < nc; c++) { const A = w.A[c]; h[c] = w.V[c] / A; rho[c] = w.V[c] > 0 ? w.M[c] / w.V[c] : PHYS.rho_oc; th[c] = w.Z[c] / A; sI[c] = w.V[c] > 0 ? w.S[c] / w.V[c] : 1; }
   const vel = (c, m, out, o) => { out[o] = U[3*c] - Wm[3*m]; out[o+1] = U[3*c+1] - Wm[3*m+1]; out[o+2] = U[3*c+2] - Wm[3*m+2]; };
@@ -1174,7 +1201,7 @@ function fluxes(w, dt, Xh, Wm) {
       for (const [c, sg, vx, vy, vz] of faces) {
         if ((sg === 1 ? 1 : 2) !== side) continue; // overriding face is material: no flux
         const out = sg * (vx*nx + vy*ny + vz*nz), q = dt * Math.max(0, out) * len, dv = h[c] * q, dm = rho[c] * dv, dz = th[c] * q;
-        dV[c] -= dv; dM[c] -= dm; dZ[c] -= dz; dS[c] -= sI[c] * dv; B.Vs += dv; B.Ms += dm; B.Zs += dz;
+        dV[c] -= dv; dM[c] -= dm; dZ[c] -= dz; dS[c] -= sI[c] * dv; B.Vs += dv; B.Ms += dm; B.Zs += dz; slabZ[c] += dz; slabA[c] += q;
       }
     } else { // transform: conservative exchange between facing copies
       for (let k = 0; k < 2; k++) {
@@ -1186,7 +1213,20 @@ function fluxes(w, dt, Xh, Wm) {
       }
     }
   }
-  return { dV, dM, dZ, dS, B };
+  return { dV, dM, dZ, dS, B, slabZ, slabA };
+}
+
+// Slab reservoir (eq. slab, Alg. 6): W decays over the assimilation time and gains gρmα times the heat
+// deficit that subducted; L grows by the area of lithosphere that went down. Held per copy as line
+// integrals ∫W dℓ (N) and ∫L dℓ (m²).
+function slabSources(w, dt, slabZ, slabA) {
+  const decay = Math.exp(-dt / RHEO.tau_a), gain = G * PHYS.rho_m * PHYS.alpha * 1000 * R_M * R_M; // Z is in K·km·sr
+  const tlen = RHEO.Lmax > 0 ? trenchLengths(w) : null;
+  for (let c = 0; c < w.CM.length; c++) {
+    w.Wl[c] *= decay;
+    if (slabZ[c] > 0 && !(tlen && tlen[c] > 0 && w.Ll[c] / tlen[c] > 1000 * RHEO.Lmax)) w.Wl[c] += gain * slabZ[c];
+    w.Ll[c] += slabA[c] * R_M * R_M;
+  }
 }
 
 function step(w, dtWant, retry = true) {
@@ -1214,6 +1254,7 @@ function step(w, dtWant, retry = true) {
       const th2 = Math.max(0, Math.sqrt(th * th + 4 * PHYS.kappa * PHYS.dT * PHYS.dT * dt / Math.PI) - PHYS.qcool * dt);
       const Zn = A * th2; B.Zsrc += Zn - w.Z[c]; w.Z[c] = Zn;
     }
+    slabSources(w, dt, F.slabZ, F.slabA);
     w.t += dt;
     return dt;
   }
@@ -1405,7 +1446,7 @@ const ui = {
   dt: () => 0.02 * Math.pow(250, $('dt').value / 100),
   N: () => Math.round(1000 * Math.pow(100, $('nv').value / 100) / 100) * 100,
   cf: () => +$('cf').value, np: () => +$('np').value, km: () => +$('km').value,
-  st: () => Math.pow(10, +$('st').value), ck: () => +$('ck').value
+  st: () => Math.pow(10, +$('st').value), ck: () => +$('ck').value, ta: () => +$('ta').value
 };
 let running = true, seed = (Math.random() * 2 ** 31) | 0, fps = 60, costMs = 0, subSteps = 0, meshMode = 'lagrangian';
 const fmtN = n => n.toLocaleString('en-US');
@@ -1424,6 +1465,8 @@ function refreshLabels() {
   $('stVal').textContent = `× ${st < 1 ? st.toFixed(2) : st.toFixed(1)}`;
   $('stHint').textContent = `drag length √(Ĥ/β) ≈ ${fmtN(Math.round(Math.sqrt(0.5 * st * (RHEO.Bc * PHYS.h_oc + RHEO.Bl * thermalThickness(PHYS.Theta_ss)) / dragBeta(PHYS.h_oc, PHYS.Theta_ss)) / 1000 / 100) * 100)} km under old ocean`;
   $('ckVal').textContent = ui.ck().toFixed(1);
+  $('taVal').textContent = `${ui.ta().toFixed(1)} Myr`;
+  $('taHint').textContent = `steady pull ≈ ${(ui.ta() * SEC_MYR * G * PHYS.rho_m * PHYS.alpha * PHYS.Theta_ss * 1000 * 0.01 / 3.15576e7 / 1e12).toFixed(1)} TN/m per cm/yr of 80 Myr ocean subducting; slab drag ξ ≈ ${(RHEO.xi * 0.01 / 3.15576e7 / 1e12).toFixed(1)} TN/m per cm/yr`;
 }
 function regenerate() {
   W = makeWorld({ seed, N: ui.N(), contFrac: ui.cf(), plates: ui.np(), kappaM: ui.km(), meshMode });
@@ -1433,7 +1476,8 @@ function setRunning(r) { running = r; $('run').textContent = r ? 'Pause' : 'Run'
 $('run').onclick = () => setRunning(!running);
 $('reset').onclick = () => regenerate();
 $('reseed').onclick = () => { seed = (Math.random() * 2 ** 31) | 0; regenerate(); };
-for (const id of ['dt', 'nv', 'cf', 'np', 'km', 'st', 'ck']) $(id).addEventListener('input', refreshLabels);
+for (const id of ['dt', 'nv', 'cf', 'np', 'km', 'st', 'ck', 'ta']) $(id).addEventListener('input', refreshLabels);
+$('ta').addEventListener('input', () => { RHEO.tau_a = ui.ta(); });
 $('st').addEventListener('input', () => { RHEO.strength = ui.st(); });
 $('ck').addEventListener('input', () => { RHEO.ck = ui.ck(); });
 for (const id of ['nv', 'cf', 'np']) $(id).addEventListener('change', regenerate);
@@ -1485,6 +1529,8 @@ function refreshStats(land) {
   const km3 = R_KM * R_KM / 1e6; // V in km·sr → 10⁶ km³
   { const sp = []; for (let c = 0; c < w.CM.length; c++) sp.push(Math.hypot(w.U[3*c], w.U[3*c+1], w.U[3*c+2]) * R_KM / 10); sp.sort((a, b) => a - b);
     $('sSpeed').textContent = `${sp[sp.length >> 1].toFixed(1)} · ${sp[sp.length - 1].toFixed(1)} cm/yr`; }
+  { const tl = trenchLengths(w); let s = 0, l = 0, mx = 0; for (let c = 0; c < w.CM.length; c++) if (tl[c] > 0) { s += w.Wl[c]; l += tl[c]; mx = Math.max(mx, w.Wl[c] / tl[c]); }
+    $('sSlab').textContent = l > 0 ? `${(s / l / 1e12).toFixed(1)} · ${(mx / 1e12).toFixed(1)} TN/m` : '–'; }
   $('sSolve').textContent = w.solve ? `${w.solve.iters} in ${w.solve.passes} · ${w.solve.residual.toExponential(0)}` : '–';
   $('sFlux').textContent = `${(B.Vc * km3).toFixed(1)} · ${(B.Vs * km3).toFixed(1)} M km³`;
   const eV = (sum('V') - (B.V0 + B.Vc - B.Vs)) / B.V0, eM = (sum('M') - (B.M0 + B.Mc - B.Ms)) / B.M0, eZ = (sum('Z') - (B.Z0 + B.Zsrc - B.Zs)) / B.Z0;

@@ -16,6 +16,7 @@ The whole app is one file, `index.html`. It loads one script from a content deli
 | Plates | Initial plate count; regenerates |
 | Plate strength | Multiplies the lithosphere's depth-integrated viscosity; takes effect immediately. The hint shows the drag length under old ocean |
 | Keel drag c_k | How much basal drag grows with lithospheric thickness (crust + thermal lithosphere) |
+| Slab assimilation τ_a | How long a slab keeps pulling after it sinks; longer means stronger slab pull. The hint gives the steady pull per cm/yr of subduction |
 | Mesh velocity | Markers follow the material (the method's default) or stay put apart from smoothing; seams move either way |
 | Smoothing κm | Mesh-velocity relaxation per step |
 | View | Elevation, plates and seams, thermal age, crustal thickness, speed, or effective strain rate |
@@ -36,7 +37,7 @@ The whole app is one file, `index.html`. It loads one script from a content deli
 
 Two scripts run the page in headless Chromium and print measurements, numbered as the verification tests in the method document.
 
-- `npm run check` (`tests/components.js`, a few seconds): component checks on small hand-built worlds. They cover one-sided seam coupling, transform opening against C_n (test 6), rigid rotations being strain-free on the sphere (test 3), the drag-dominated limit u = −∇Φ/β (the instantaneous form of test 4), the drop in gravitational potential energy (GPE) against classical ridge push, budgets (test 1) and free-stream preservation (test 2). Iterate against these.
+- `npm run check` (`tests/components.js`, a few seconds): component checks on small hand-built worlds. They cover one-sided seam coupling, slab feedback (test 7) and the slab reservoir surviving mesh maintenance, transform opening against C_n (test 6), rigid rotations being strain-free on the sphere (test 3), the drag-dominated limit u = −∇Φ/β (the instantaneous form of test 4), the drop in gravitational potential energy (GPE) against classical ridge push, budgets (test 1) and free-stream preservation (test 2). Iterate against these.
 - `npm run check:planet` (`tests/planet.js`, tens of minutes headless): a whole-planet smoke test of budgets, speeds, solver effort and mesh lifetime for four seeds. Run it occasionally.
 
 `makeWorld` accepts `plateOf`, `seamOf` and `stateOf` to build test worlds by hand, and a world's `bodyForce` hook applies a test load.

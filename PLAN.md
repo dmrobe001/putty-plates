@@ -99,11 +99,35 @@ Choices made here:
 - **Mesh lifetime**: 51, 2.4, 13 and 37 Myr for seeds 11, 22, 33 and 44, stopped by all-seam slivers at junctions, as in slice 1.
 - **Cost**: about 150 ms per simulated Myr at 8,000 markers while speeds are moderate.
 
+## Slice 3: slab reservoir (done)
+
+Implemented from the document (§1.9, eq. slab and slabforce; §2.5 seam terms; Alg. 6):
+
+| Document | Code (`index.html`) |
+| --- | --- |
+| W and L per trench copy, remapped by length along the trench | `w.Wl` = ∫W dℓ (N), `w.Ll` = ∫L dℓ (m²) per subducting copy; W = ∫W dℓ / ℓ with ℓ from `trenchLengths` |
+| dW/dt = gρmα Θ_tr v_s − W/τ_a, dL/dt = v_s, exact decay per step | `slabSources`, fed by the outflow that `fluxes` records per subducting copy |
+| Optional input cutoff at L > L_max | `RHEO.Lmax` (0 = off) |
+| Slab force ℓ W n and drag ℓ ξ n nᵀ on the subducting copy | seam loop in `solvePass` |
+
+Choices:
+
+- **The reservoir as line integrals owned by copies**: this is the same idea as V = ∫h. A seam merge adds the removed copy's integrals to the copy that absorbs it, so the totals survive maintenance exactly.
+- **Parameters**: τ_a = 5 Myr (UI slider, 1–20 Myr), ξ = 2 × 10²² N·s/m² (about 4πη for a mantle viscosity η ≈ 2 × 10²¹ Pa·s). For 80 Myr ocean, τ_a = 5 Myr gives a steady pull of about 12 TN/m per cm/yr of subduction against a slab drag of about 6 TN/m per cm/yr. Slab drag acts on every subducting copy, whether or not it has a slab yet, as in the document.
+- **No trench suction yet** (P_ts = 0).
+
+### Measured (`npm run check`)
+
+- **Test 7, slab feedback**: a polar cap of radius 25° made 100× stiffer (so it is nearly rigid, as the test assumes), with a trench on its leading half and a ridge on its trailing half. It is driven by a body force plus its own ridge push, with cooling frozen at Θ(60 Myr). The lumped prediction uses ℓ = Σ ℓ_e(n_e·x̂)²:
+  - Γ = 0.47: the speed starts at 2.00 cm/yr (2.22 predicted) and levels off at 4.46 (4.19 predicted), after about 4 τ_a.
+  - Γ = 1.41: the speed grows from 2.0 to 14.3 cm/yr over 40 Myr without settling.
+- **At normal strength** the same cap is not rigid. Its interior moves near the drag-limited f/β, and only a rim about one drag length wide feels the trench. The rigid-plate Γ doesn't describe it.
+- **Reservoir across maintenance**: six seam merges along the trench leave Σ∫W dℓ unchanged.
+
 ## Next, in order
 
 Physics first (see "How we work" in the README). Each step comes with component checks on small hand-built worlds (`makeWorld` with `plateOf`, `seamOf`, `stateOf`; `w.bodyForce`).
 
-3. **Slab reservoir** (§1.9): W and L per trench copy, carried through maintenance; slab pull and slab drag ξ on the subducting face. Check: test 7 on a one-trench world (Γ < 1 terminal velocity, Γ > 1 runaway).
 4. **Rest of the rheology**: power-law creep with n = 3 (eq. visc), sharing the Picard loop with the contact states; damage and healing G(s, ε̇), f(s) in Ĥ, and C_n(s), C_t(s). Checks: a strip in uniform extension against the analytic power-law strain rate; damage growing under sustained shear and recovering when it stops, at the law's rates.
 5. **Seam life cycle** (§1.10, §2.8 "Seam events"): 𝒩 and δ per copy, persistence clocks, and the six events. Check: test 8 on hand-built worlds. Also test on a triple-junction world whether events remove the all-seam slivers that end runs. That they would is a conjecture from slice 1, not yet tested.
 

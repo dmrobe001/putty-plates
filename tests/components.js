@@ -52,6 +52,46 @@ require('./harness').inPage(() => {
     res.transform.push({ Cn_factor: k, rms_opening_over_rms_slip: +(rms(r.map(q => q.closing)) / rms(r.map(q => q.slip))).toExponential(2) });
   }
 
+  // Test 7 (slab feedback): a stiff polar cap (plate 0) with a trench on its leading half and a ridge on its
+  // trailing half, driven along x̂ by a body force plus its own ridge push, cooling frozen so the arriving
+  // heat deficit stays Θ(60 Myr). Lumped rigid-plate prediction: v (βA_p + ξℓ − Gℓ) = F, with
+  // ℓ = Σ ℓ_e (n_e·x̂)² over trench edges and G = τ_a g ρm α Θ_tr. Γ = Gℓ / (ξℓ + βA_p).
+  {
+    const capCos = Math.cos(25 * Math.PI / 180), Th60 = 2 * PHYS.dT * Math.sqrt(PHYS.kappa * 60 / Math.PI), f0 = 2e6;
+    const st = RHEO.strength, si = RHEO.stepIter, ta = RHEO.tau_a; RHEO.strength = 100; RHEO.stepIter = 400;
+    const make = () => { const w = makeWorld({ seed: 4, N: 1500, contFrac: 0, plates: 2, kappaM: 0.1, meshMode: 'lagrangian',
+        plateOf: (x, y, z) => z > capCos ? 0 : 1,
+        seamOf: (p1, p2, mx) => mx > 0 ? { type: TRENCH, sub: 0 } : { type: RIDGE, sub: -1 },
+        stateOf: () => ({ h: PHYS.h_oc, rho: PHYS.rho_oc, Th: Th60 }) });
+      w.noSources = true; w.bodyForce = (x, y, z, p) => p === 0 ? [f0 * (1 - x * x), -f0 * x * y, -f0 * x * z] : [0, 0, 0]; return w; };
+    const w0 = make(), X = w0.X, phiCap = phiCol(PHYS.h_oc, PHYS.rho_oc, Th60) - PHI_R; let bA = 0, F = 0, ell = 0;
+    for (let c = 0; c < w0.CM.length; c++) if (w0.CP[c] === 0) { const m = w0.CM[c], x = X[3*m], a = w0.A[c] * R_M * R_M; bA += dragBeta(PHYS.h_oc, Th60) * a; F += f0 * (1 - x * x) * a; }
+    for (let e = 0; e < w0.sA.length; e++) { const a = w0.sA[e], b = w0.sB[e];
+      const mx = X[3*a] + X[3*b], my = X[3*a+1] + X[3*b+1], mz = X[3*a+2] + X[3*b+2], ex = X[3*b] - X[3*a], ey = X[3*b+1] - X[3*a+1], ez = X[3*b+2] - X[3*a+2];
+      const nx = (ey*mz - ez*my) / Math.hypot(ey*mz - ez*my, ez*mx - ex*mz, ex*my - ey*mx), len = Math.hypot(ex, ey, ez) * R_M;
+      if (w0.sT[e] === TRENCH) ell += len * nx * nx;
+      else F += len * phiCap * (w0.CP[w0.sC[4*e]] === 0 ? nx : -nx); } // the cap's own free edge at its ridge: Φ̃ n_out
+    const Gc = G * PHYS.rho_m * PHYS.alpha * Th60 * 1000;
+    const capSpeed = w => { let v = 0, a = 0; for (let c = 0; c < w.CM.length; c++) if (w.CP[c] === 0) { const m = w.CM[c], x = w.X[3*m];
+      v += w.A[c] * (w.U[3*c] - x * (w.U[3*c]*x + w.U[3*c+1]*w.X[3*m+1] + w.U[3*c+2]*w.X[3*m+2])); a += w.A[c] * (1 - x * x); } return v / a * R_KM / 10; };
+    res.slabFeedback = [];
+    for (const tau of [5, 15]) {
+      RHEO.tau_a = tau; const Gl = tau * SEC_MYR * Gc * ell, Gam = Gl / (RHEO.xi * ell + bA);
+      const w = make(); solveVelocity(w, 5000); const v0 = capSpeed(w), sp = [];
+      while (w.t < 40 && !w.exhausted) { advance(w, 5); sp.push(+capSpeed(w).toFixed(2)); }
+      res.slabFeedback.push({ tau_a: tau, Gamma: +Gam.toFixed(2),
+        v0_cm_yr: +v0.toFixed(2), v0_pred: +(F / (bA + RHEO.xi * ell) * SEC_MYR / 1e4).toFixed(2),
+        v_terminal_pred: Gam < 1 ? +(F / (bA + RHEO.xi * ell - Gl) * SEC_MYR / 1e4).toFixed(2) : 'runaway',
+        v_every_5_Myr: sp.join(' '), stopped: w.exhausted ? w.fail : null });
+      if (tau === 5) { // the reservoir is a line integral owned by copies: mesh maintenance must not change its total
+        const tot = () => w.Wl.reduce((q, v) => q + v, 0), before = tot(), o = { ...w.ops };
+        w.L0 *= 3; for (let i = 0; i < 5; i++) maintain(w); w.L0 /= 3; // coarser target spacing forces chain merges along the trench
+        res.slabReservoirAcrossMaintenance = { seam_merges: w.ops.seam - o.seam, relative_change: +((tot() - before) / before).toExponential(1) };
+      }
+    }
+    RHEO.strength = st; RHEO.stepIter = si; RHEO.tau_a = ta;
+  }
+
   // Test 3 on the sphere: a rigid rotation produces no strain in any triangle.
   {
     const w = makeWorld({ seed: 7, N: 2000, contFrac: 0.3, plates: 6, kappaM: 0.1, meshMode: 'lagrangian' });
