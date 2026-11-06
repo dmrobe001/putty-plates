@@ -26,9 +26,15 @@ The whole app is one file, `index.html`. It loads one script from a content deli
 | New seed (N) | A different random world |
 | Drag, scroll, pinch | Orbit and zoom |
 
+## How we work
+
+- **This is for a game, not for science.** Low resolution, loose solver tolerances, poor convergence and departures from Earth's statistics are all acceptable, as long as the simulation runs fairly stably and produces something interesting.
+- **Build the physics, not stopgaps.** When the planet misbehaves because a phenomenon isn't implemented yet (slab pull, the seam life cycle, power-law creep), the answer is to implement it. Don't patch in a rule that imitates it, and don't tune parameters to make an incomplete model look normal. Odd whole-planet behaviour is expected until the main phenomena are in place.
+- **Check components, not planets.** Test each piece against something it must get right in isolation: an exact solution, a conservation law, a limiting case, a small hand-built configuration. Run a full planet only when a question can only be answered by the whole system, and don't iterate on full runs. Headless browsers emulate the graphics processing unit (GPU) in software, so full runs are much slower there than in a real browser.
+
 ## Checks
 
-`tests/sim-checks.js` runs the page in headless Chromium and prints measurements, numbered as the verification tests in the method document: budgets over whole runs (test 1), free-stream preservation (test 2), rigid rotations being strain-free on the sphere (test 3), the drag-dominated limit u = −∇Φ/β (the instantaneous form of test 4), transform opening against C_n (test 6), the GPE drop against classical ridge push, plate speeds, solver iterations, and how long the mesh lasts before seams would need to change topology.
+`tests/sim-checks.js` runs the page in headless Chromium and prints measurements, numbered as the verification tests in the method document: budgets over whole runs (test 1), free-stream preservation (test 2), rigid rotations being strain-free on the sphere (test 3), the drag-dominated limit u = −∇Φ/β (the instantaneous form of test 4), transform opening against C_n (test 6), the GPE drop against classical ridge push, plate speeds, solver iterations, and how long the mesh lasts before seams would need to change topology. The whole-planet runs at the start of the script take tens of minutes headless. They are a smoke test to run occasionally; the component checks are the ones to iterate against.
 
 ```
 npm install
