@@ -186,11 +186,47 @@ Choices:
 - Both runs still stop early, at 5.8 and 16.3 Myr, with the mesh tangling at all-seam triangles at junctions (markers with 3–4 copies).
 - **The conjecture from slice 1 is false**: events don't remove junction slivers. Frequent type changes add junction complexity.
 
+## Slice 6: the mesh update (done)
+
+Document section "Mesh update" (§2.10). Seam segments are triangle edges, so "the mesh never tangles" and "seams never cross" are the same statement. The update is a move that never inverts a triangle (Δt halving, as before), then a repair between steps that restores an invariant: every altitude ≥ 0.3 L0, every edge < 1.6 L0. Repair never moves a marker and never takes one off a seam. Each violation is classified by its thin direction (vertex v too close to edge ab) and by what v and ab are, which picks one local, conservative operation.
+
+| Document | Code (`index.html`) |
+| --- | --- |
+| Long seam edge → split, one copy per side, slab reservoir split by length | `splitSeam` |
+| Seam marker near a seam edge, not near its ends → snap: flip ab, reroute the seam a–v–b | `snapSeam` (falls back to `splitSeam` at the foot) |
+| Seam marker near another seam marker → zip: collapse, seams moved and merged | `collapseAny`, `mergeSeams` |
+| Candidate search, priorities, up to three rounds per step | `seamRepair`, called from `maintain` before the flips |
+| Remap when area changes sides: net area moves between the groups (sides) of a patch at the donor's average; vanished copies hand over everything | `remapCavity` |
+
+Choices:
+
+- **Zip and snap are seam events.** All the other operations are numerics. Two seams closer than a cell are one damaged band, and a band one cell wide is one seam. That is the resolution limit of the slice-5 equivalence. Merge rule for coinciding seam edges: a trench wins and keeps its polarity, unless the other is a trench of the opposite polarity; then the two outer plates collide and the edge becomes a transform for the life-cycle rules to reclassify. Equal types stay; any other pair becomes a transform.
+- **Junctions keep their markers.** A collapse keeps the endpoint with more seam edges. Junction migration and plate consumption then follow from chain merges and zips, with no special junction code.
+
+### Measured (`npm run check`, about 20 s)
+
+- **Test 10, plate consumption** (prescribed rotations about the pole, 2,000 markers): a 30° wedge subducting under both neighbours at 5 cm/yr each pinches off at the poles first, then zips shut along its length.
+  - It is gone at 35 Myr, against 33.4 predicted. The last slivers go once they are thinner than 0.3 L0.
+  - Its two trenches become 38 transform edges between its former neighbours (opposite polarities → collision).
+  - No trench ever had the wrong side subducting; budgets close to 4 × 10⁻¹⁵; the run continues to 45 Myr.
+- **Repair alone keeps a uniform state uniform** to 6 × 10⁻¹⁵ over the whole consumption (state reset to uniform before each maintenance, measured after it), through 24 zips, 16 snaps and 14 seam splits.
+- **Seam splits** conserve V, Z and the slab reservoir to about 1 × 10⁻¹⁵ and keep every trench's polarity.
+- **The event scenarios used to stop on tangles, and the checks didn't say so.** Nucleation stopped at 14.1 Myr and subduction initiation at 2.6 Myr. Their slice-5 numbers were measured just before the runs died. Every scenario now reports `ran_to_Myr` and `stopped`. The runs no longer stop, so each now runs only as long as its rule needs: nucleation to 14 Myr, initiation to 3 Myr.
+  - Results in those windows: nucleation 499 edges, all within 10° of the equator; initiation 61 of 61 trench edges subducting the old side.
+
+### Known defects found here (not fixed)
+
+- **Transport at junctions.** Copies at and next to a junction drift away from a uniform state by about 1.5% per Myr. The old code shows the same drift to the third digit. Suspected cause: a junction's mesh velocity cannot equal every overriding plate's velocity, so a trench face that the flux treats as material actually sweeps area. Interior copies pick up 3.8% by the time the wedge is gone.
+- **Beyond the windows, conjecture until tested:**
+  - Under the nucleation push, the swath zips into fewer seams after 14 Myr (499 → 258 edges by 16 Myr). Then new seams nucleate outside the band: 494 edges, only 228 near the equator, by 18 Myr.
+  - Under the unrelenting initiation push, interior damage spreads and nucleation runs away after 5 Myr.
+  - Both may be what "every damaged edge nucleates" does once runs survive (step 7). They may also be the junction drift feeding damage.
+
 ## Next, in order
 
 Physics first (see "How we work" in the README). Each step comes with component checks on small hand-built worlds (`makeWorld` with `plateOf`, `seamOf`, `stateOf`; `w.bodyForce`).
 
-6. **Junction-aware mesh adaptation** (the document's Adapt and seam-respecting rebuild, §2.9): remove sectors that have shrunk to a sliver at junctions, for example by merging the junction marker along one of its seams or retriangulating the junction's star with seams as constraints. This is numerics, but it is now what ends every run. Check: a hand-built triple junction whose plates converge on it must run without tangling, with budgets exact.
+6. **Transport at junctions**: make every face's flux consistent with how it moves. A face declared material must either move with its copy or carry the flux of the area it sweeps. Check: the slice-6 wedge keeps junction copies uniform.
 7. **Narrow nucleation**: nucleation currently converts every damaged edge in a band into a seam. Nucleating only along the band's minimum of integrity would give single faults. Check: the nucleation scenario yields one connected chain.
 
 Numerics, only when stability or looks need them: second-order transport (§2.3), the exact intersection remap (§2.9), a geometric conservation law exact on the sphere, WebGPU kernels and multigrid (§3).

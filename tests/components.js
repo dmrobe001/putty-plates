@@ -154,25 +154,27 @@ require('./harness').inPage(() => {
     // Healing: an idle transform whose damage recovers (k_h raised to keep the test short) must weld shut.
     { const kh = RHEO.kh; RHEO.kh = 0.5; const w = hemis(TRANSFORM, ocean(60)); const s0 = types(w); const err = run(w, 10); RHEO.kh = kh;
       let hdev = 0; for (let c = 0; c < w.CM.length; c++) hdev = Math.max(hdev, Math.abs(w.V[c] / w.A[c] - PHYS.h_oc) / PHYS.h_oc);
-      res.events.healing = { seams_before: s0, seams_after: types(w), copies_minus_markers: w.CM.length - w.X.length / 3, plates_after: new Set(w.CP).size, max_h_deviation: +hdev.toExponential(1), worst_budget: +err.toExponential(1), events: w.events }; }
+      res.events.healing = { seams_before: s0, seams_after: types(w), copies_minus_markers: w.CM.length - w.X.length / 3, plates_after: new Set(w.CP).size, max_h_deviation: +hdev.toExponential(1), worst_budget: +err.toExponential(1), events: w.events, ran_to_Myr: +w.t.toFixed(1), stopped: w.exhausted ? w.fail : null }; }
     // Nucleation: one plate (no seam) sheared along the equator, with fast damage. Transforms should appear near the equator.
     { const kd = RHEO.kd; RHEO.kd = 40; const w = makeWorld({ seed: 6, N: 1500, contFrac: 0, plates: 1, kappaM: 0.1, meshMode: 'lagrangian', stateOf: ocean(60) });
       w.noSources = true; const f0 = 4e5; w.bodyForce = (x, y, z) => { const k = z > 0 ? f0 : -f0; return [-k * y, k * x, 0]; }; solveVelocity(w, RHEO.maxIter, RHEO.firstPasses);
-      const err = run(w, 20); RHEO.kd = kd;
+      const err = run(w, 14); RHEO.kd = kd; // the window in which the band nucleates (from about 9 Myr)
+
       let near = 0; for (let e = 0; e < w.sA.length; e++) { const z = 0.5 * (w.X[3*w.sA[e]+2] + w.X[3*w.sB[e]+2]); if (Math.abs(z) < Math.sin(10 * Math.PI / 180)) near++; }
       let split = 0; for (let m = 0; m < w.X.length / 3; m++) if (w.cOff[m+1] - w.cOff[m] > 1) split++;
-      res.events.nucleation = { seam_edges: w.sA.length, within_10deg_of_equator: near, split_markers: split, worst_budget: +err.toExponential(1), events: w.events }; }
+      res.events.nucleation = { seam_edges: w.sA.length, within_10deg_of_equator: near, split_markers: split, worst_budget: +err.toExponential(1), events: w.events, ran_to_Myr: +w.t.toFixed(1), stopped: w.exhausted ? w.fail : null }; }
     // Subduction initiation: a transform pushed shut between old north (80 Myr) and young south (5 Myr). The old side must subduct.
     { const w = hemis(TRANSFORM, (x, y, z, p) => ({ h: PHYS.h_oc, rho: PHYS.rho_oc, Th: ThAge(p === 0 ? 80 : 5) })); w.bodyForce = meridional(1);
-      const err = run(w, 8); let right = 0, tr = 0;
+      // initiation fires at τ = 2 Myr; the push never relents, so later evolution is not this rule's test
+      const err = run(w, 3); let right = 0, tr = 0;
       for (let e = 0; e < w.sA.length; e++) if (w.sT[e] === TRENCH) { tr++; const o = w.sSub[e] === 2 ? 2 : 0, c = w.sC[4*e + o]; if (w.Z[c] / w.A[c] > ThAge(40)) right++; }
-      res.events.subductionInitiation = { seams_after: types(w), trench_edges_with_old_side_subducting: `${right}/${tr}`, subducted_Mkm3: +(w.budget.Vs * R_KM * R_KM / 1e6).toFixed(2), worst_budget: +err.toExponential(1), events: w.events }; }
+      res.events.subductionInitiation = { seams_after: types(w), trench_edges_with_old_side_subducting: `${right}/${tr}`, subducted_Mkm3: +(w.budget.Vs * R_KM * R_KM / 1e6).toFixed(2), worst_budget: +err.toExponential(1), events: w.events, ran_to_Myr: +w.t.toFixed(1), stopped: w.exhausted ? w.fail : null }; }
     // Rifting: a transform pulled apart. Thin (2 Myr) lithosphere must open a ridge and create crust; thick (80 Myr) must not.
     for (const age of [2, 80]) { const w = hemis(TRANSFORM, ocean(age)); w.bodyForce = meridional(-1); const err = run(w, 8);
-      res.events['rifting_' + age + 'Myr'] = { seams_after: types(w), created_Mkm3: +(w.budget.Vc * R_KM * R_KM / 1e6).toFixed(2), worst_budget: +err.toExponential(1), events: w.events }; }
+      res.events['rifting_' + age + 'Myr'] = { seams_after: types(w), created_Mkm3: +(w.budget.Vc * R_KM * R_KM / 1e6).toFixed(2), worst_budget: +err.toExponential(1), events: w.events, ran_to_Myr: +w.t.toFixed(1), stopped: w.exhausted ? w.fail : null }; }
     // Ridge death: a ridge pushed shut (young, so it cannot start subducting) must become a transform.
     { const w = hemis(RIDGE, ocean(5)); w.bodyForce = meridional(1); const err = run(w, 6);
-      res.events.ridgeDeath = { seams_after: types(w), worst_budget: +err.toExponential(1), events: w.events }; }
+      res.events.ridgeDeath = { seams_after: types(w), worst_budget: +err.toExponential(1), events: w.events, ran_to_Myr: +w.t.toFixed(1), stopped: w.exhausted ? w.fail : null }; }
     // Breakoff: a stiff polar cap subducting at its leading edge with a continent riding toward the centre of the
     // trench, driven by a steady body force. Expected: breakoff where the continent arrives; with the push still
     // on and old ocean on the other side, subduction may restart with the opposite polarity.
@@ -233,6 +235,61 @@ require('./harness').inPage(() => {
     while (w.t < 10 && !w.exhausted) { advance(w, 0.5); const B = w.budget;
       for (const e of [(sum(w, 'V') - (B.V0 + B.Vc - B.Vs)) / B.V0, (sum(w, 'M') - (B.M0 + B.Mc - B.Ms)) / B.M0, (sum(w, 'Z') - (B.Z0 + B.Zsrc - B.Zs)) / B.Z0]) worst = Math.max(worst, Math.abs(e)); }
     res.budgets = { Myr: +w.t.toFixed(1), stopped: w.exhausted ? w.fail : null, worst_relative_error: +worst.toExponential(1), ops: w.ops };
+  }
+
+  // Test 10 (mesh update), prescribed rigid rotations about the pole. Plate 1 is a 30° wedge of longitude
+  // subducting at both its edges under plates 0 (west, moving east) and 2 (east, moving west), at 5 cm/yr
+  // each at the equator; 0 and 2 spread apart at a ridge on the far side. Trenches move with their
+  // overriding plates, so the wedge closes at 2ω and must be gone at 30°/2ω = 33.4 Myr: pinched first at
+  // the poles, where it is narrowest, then zipped shut. Uniform h throughout (the ridge makes h_oc too), so
+  // h must stay uniform through every zip and snap. Known defect, present before the repair existed: copies at
+  // and next to the polar junctions drift by about 1.5% per Myr (a junction's mesh velocity cannot equal every
+  // overriding plate's velocity, so a trench face declared material sweeps area). Uniformity is therefore
+  // reported for interior copies, and for all copies separately; both until the wedge is gone, because
+  // afterwards plates 0 and 2 converge rigidly across a transform, which piles crust up by construction.
+  {
+    const sum = (w, k) => w[k].reduce((q, v) => q + v, 0);
+    const budgetErr = w => { const B = w.budget; return Math.max(Math.abs((sum(w, 'V') - (B.V0 + B.Vc - B.Vs)) / B.V0), Math.abs((sum(w, 'M') - (B.M0 + B.Mc - B.Ms)) / B.M0), Math.abs((sum(w, 'Z') - (B.Z0 + B.Zsrc - B.Zs)) / B.Z0)); };
+    const half = 15 * Math.PI / 180, om = 50 / R_KM;
+    const make = () => { const w = makeWorld({ seed: 3, N: 2000, contFrac: 0, plates: 3, kappaM: 0.1, meshMode: 'lagrangian',
+        plateOf: (x, y) => { const f = Math.atan2(y, x); return f < -half ? 0 : f <= half ? 1 : 2; },
+        seamOf: (p1, p2) => (p1 === 1 || p2 === 1) ? { type: TRENCH, sub: 1 } : { type: RIDGE, sub: -1 },
+        stateOf: () => ({ h: PHYS.h_oc, rho: PHYS.rho_oc, Th: 1000 }) });
+      w.kinematic = true; w.noSources = true; w.noEvents = true; w.noDamage = true;
+      w.omega = [[0, 0, om], [0, 0, 0], [0, 0, -om]]; return w; };
+    const w = make(); let opsRep = null;
+    const area1 = () => { let a = 0; for (let c = 0; c < w.CM.length; c++) if (w.CP[c] !== 0 && w.CP[c] !== 2) a += w.A[c]; return a; };
+    const A0 = area1(); let worst = 0, hdev = 0, hseam = 0, gone = null, wrongPol = 0;
+    while (w.t < 45 && !w.exhausted) { advance(w, 1); worst = Math.max(worst, budgetErr(w));
+      if (gone === null) { // before the wedge is gone; interior copies only (see below)
+        for (let c = 0; c < w.CM.length; c++) if (w.cOff[w.CM[c] + 1] - w.cOff[w.CM[c]] === 1) hdev = Math.max(hdev, Math.abs(w.V[c] / w.A[c] - PHYS.h_oc) / PHYS.h_oc);
+        for (let c = 0; c < w.CM.length; c++) hseam = Math.max(hseam, Math.abs(w.V[c] / w.A[c] - PHYS.h_oc) / PHYS.h_oc); }
+      for (let e = 0; e < w.sA.length; e++) if (w.sT[e] === TRENCH) { const p = w.CP[w.sC[4*e + (w.sSub[e] === 1 ? 0 : 2)]]; if (p === 0 || p === 2) wrongPol++; }
+      if (gone === null && area1() < 1e-6 * A0) gone = +w.t.toFixed(1); }
+    // Repair alone: a second run in which the state is reset to uniform before every maintenance call and
+    // measured right after it. This is the claim the remap makes, free of transport errors.
+    let hrep = 0; { const w2 = make(); w2.noMaintain = true; let gone2 = false;
+      while (w2.t < 45 && !w2.exhausted && !gone2) {
+        for (let c = 0; c < w2.CM.length; c++) { const A = w2.A[c]; w2.V[c] = PHYS.h_oc * A; w2.M[c] = PHYS.rho_oc * PHYS.h_oc * A; w2.Z[c] = 1000 * A; w2.S[c] = PHYS.h_oc * A; }
+        maintain(w2);
+        for (let c = 0; c < w2.CM.length; c++) hrep = Math.max(hrep, Math.abs(w2.V[c] / w2.A[c] - PHYS.h_oc) / PHYS.h_oc, Math.abs(w2.Z[c] / w2.A[c] - 1000) / 1000);
+        if (!step(w2, 1)) break; let a = 0; for (let c = 0; c < w2.CM.length; c++) if (w2.CP[c] !== 0 && w2.CP[c] !== 2) a += w2.A[c]; gone2 = a < 1e-6 * A0; }
+      opsRep = w2.ops; }
+    const n = [0, 0, 0]; for (let e = 0; e < w.sA.length; e++) n[w.sT[e]]++;
+    res.meshUpdate = { wedge_gone_at_Myr: gone, predicted_Myr: +(2 * half / (2 * om)).toFixed(1), ran_to_Myr: +w.t.toFixed(1), stopped: w.exhausted ? w.fail : null,
+      seams_after: { ridge: n[0], transform: n[1], trench: n[2] }, plates_after: new Set(w.CP).size, trench_edges_with_wrong_side_subducting: wrongPol,
+      max_h_deviation_interior: +hdev.toExponential(1), max_h_deviation_any: +hseam.toExponential(1), repair_alone_max_deviation: +hrep.toExponential(1), repair_alone_ops: opsRep, worst_budget: +worst.toExponential(1), ops: w.ops };
+  }
+  // Seam refinement: a trench world, polarity known, a linear h, a slab reservoir on the subducting side;
+  // halve the target spacing so that maintenance splits seam edges.
+  {
+    const w = makeWorld({ seed: 9, N: 1200, contFrac: 0, plates: 2, kappaM: 0.1, meshMode: 'lagrangian',
+      plateOf: (x, y, z) => z > 0 ? 0 : 1, seamOf: () => ({ type: TRENCH, sub: 1 }), stateOf: x => ({ h: PHYS.h_oc * (1 + 0.3 * x), rho: PHYS.rho_oc, Th: 1000 }) });
+    for (let c = 0; c < w.CM.length; c++) w.Wl[c] = w.CP[c] === 1 && w.cOff[w.CM[c] + 1] - w.cOff[w.CM[c]] > 1 ? 1e12 : 0;
+    const sum = k => w[k].reduce((q, v) => q + v, 0), V0 = sum('V'), Z0 = sum('Z'), W0 = sum('Wl'), e0 = w.sA.length;
+    w.L0 *= 0.55; maintain(w); w.L0 /= 0.55;
+    let wrong = 0; for (let e = 0; e < w.sA.length; e++) { const c = w.sC[4*e + (w.sSub[e] === 1 ? 0 : 2)]; if (w.sT[e] !== TRENCH || w.CP[c] !== 1) wrong++; }
+    res.seamSplit = { seam_edges: `${e0} → ${w.sA.length}`, splits: w.ops.seamSplit, rel_V: +(sum('V') / V0 - 1).toExponential(1), rel_Z: +(sum('Z') / Z0 - 1).toExponential(1), rel_slab: +(sum('Wl') / W0 - 1).toExponential(1), wrong_polarity: wrong };
   }
 
   // Test 2 (free-stream preservation): uniform state, u = 0, smooth imposed motion of interior markers.

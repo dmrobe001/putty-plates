@@ -400,7 +400,7 @@ with relaxation $\kappa_m\in[0,1)$ and monitor $\mathcal{M}_i=1+a_h|\vect{G}^h_i
 \item \textbf{ridge and transform:} the average of the copies' velocities (symmetric spreading), plus tangential smoothing along the chain;
 \item \textbf{trench:} the overriding copy's velocity, $\vect{w}_k=\vect{u}_{k^o}$, plus tangential smoothing, so the overriding face is material;
 \item \textbf{outer boundary:} normal component material ($\vect{w}\cdot\vect{n}=\vect{u}\cdot\vect{n}$), tangential smoothing only;
-\item \textbf{junctions:} the average over all copies.
+\item \textbf{junctions:} the velocity that best satisfies, in least squares, every incident seam's own rule for its normal component (the McKenzie--Morgan construction), falling back to the average over all copies when the seams are parallel.
 \end{itemize}
 
 \subsection{Flux update and geometric conservation}
@@ -477,6 +477,42 @@ New cells tile the cavity exactly and each old reconstruction integrates to its 
 
 \paragraph{Seam refinement.} Splitting a seam edge inserts a new seam marker with one copy per side; the cavity remap is done separately on each side, so no material crosses the seam. Slab quantities are remapped along the trench by length: $W$ and $L$ are treated as piecewise-constant line densities over each copy's length share, and the total $\sum_kW_k\ell_k$ is preserved.
 
+\subsection{Mesh update: keeping markers on seams without tangling}
+\label{sec:meshupdate}
+\paragraph{Framing.} Seam segments are triangle edges, and a triangle that never inverts has edges that never cross. So ``the mesh never tangles'' and ``seams never cross'' are one statement, and the mesh update has two parts with separate jobs:
+\begin{enumerate}
+\item a \emph{move} that never inverts a triangle: $\vect{x}^{n+1}=\vect{x}^n+\Delta t\,\vect{w}$, with $\Delta t$ halved until every triangle stays counter-clockwise (and no cell is drained);
+\item a \emph{repair}, between steps, that restores a quality invariant by local, conservative topology changes, so that the next move has room.
+\end{enumerate}
+Each marker's velocity has a part fixed by physics and a free part. For a seam marker, the normal component is physics (the rules above: mean, overriding copy, or the junction construction); its position \emph{along} the seam is free and is used for smoothing. Interior markers are entirely free; they follow the material to limit numerical diffusion. Repair may change which markers exist and how they are connected, but never moves a marker and never takes a marker off a seam: seam markers are only merged with other seam markers, and seam edges are never flipped, only split or rerouted through a marker already on the seam's path.
+
+\paragraph{Invariant.} Every triangle has all altitudes at least $0.3L_0$ and every edge is shorter than $1.6L_0$, where $L_0$ is the target spacing. Repair inspects every violation by its \emph{thin direction}, a vertex $v$ too close to the opposite edge $ab$ (a short edge is the case $v$ close to $a$ or $b$), and by what $v$ and $ab$ are:
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+$v$ & edge $ab$ & operation\\
+\midrule
+interior & not a seam & flip $ab$ (Delaunay)\\
+interior & any & collapse $v$ into $a$ or $b$\\
+interior or seam & long ($>1.6L_0$) & split $ab$ (on a seam: one copy per side)\\
+on a seam, chain neighbour of $a$ & seam & chain merge: collapse $v$ into $a$ along the seam\\
+on a seam, near $a$ & any & zip: collapse $v$ into $a$, merging their seams\\
+on a seam, not near an end & seam & snap: flip $ab$ and reroute the seam $a$--$v$--$b$\\
+\bottomrule
+\end{tabular}
+\end{center}
+A snap whose flip would invert a triangle falls back to splitting $ab$ at the foot of $v$, followed by a zip. A collapse keeps the endpoint with more seam edges, so junctions survive.
+
+\paragraph{Zip and snap are seam events.} All other operations are numerics. Zip and snap change the seam graph: two seams closer than a cell become one, and the plate sliver between them is gone. This is the resolution limit of the equivalence in Section~\ref{sec:lifecycle}: two seams with a strip narrower than one cell between them are one damaged band, and a damaged band one cell wide is one seam. When two seam edges come to coincide they merge: a trench wins and keeps its polarity, unless the other is a trench of the opposite polarity, in which case the plates on either side now collide and the seam becomes a transform for the life-cycle rules to reclassify; equal types stay; any other pair becomes a transform. Polarity is stored relative to the edge's orientation and survives the move because the side away from the vanished strip is untouched. Two consequences follow without further rules:
+\begin{itemize}
+\item \emph{Plates can be consumed.} A plate subducting at two converging trenches pinches off where it is narrowest, the trenches zip into one boundary between its former neighbours, and the plate's last slivers are snapped away.
+\item \emph{Junctions migrate.} A junction moves along a seam by absorbing the chain marker ahead of it (chain merge, keeping the junction) and, when the wedge between two of its seams closes, by a zip that hands the junction to the marker where the wedge now ends.
+\end{itemize}
+
+\paragraph{Remap for seam operations.} A zip or snap moves part of a seam, so area changes sides. The patch's copies are grouped by its triangles, old and new together; since no triangle straddles a seam, each group is one side. Within a group the remap is the interior one. Between groups only net area moves: a group whose area shrank hands that area's worth of its pool, at its own average, to the groups that grew, in proportion to their growth. A copy whose area vanishes hands over everything, and its slab reservoir goes to the largest gainer on its side. Copies are then rebuilt by sector as after seam events. Totals are conserved to round-off and a uniform state stays uniform; the piece that changed sides carries the average of the side it left. This is first order, like the interior remap, and the exact intersection remap applies unchanged.
+
+\paragraph{What is not guaranteed.} An operation can be refused: by the link condition (which keeps the mesh a manifold), by an inverted or too-thin result, or because a surviving copy would be left with almost no area. A refused violation is retried at the next repair. Meanwhile the move shrinks $\Delta t$, and the run stops if $\Delta t$ cannot be made small enough. No bound on refusals is proved.
+
 %======================================================================
 \section{Algorithms}
 %======================================================================
@@ -486,7 +522,7 @@ New cells tile the cavity exactly and each old reconstruction integrates to its 
 \begin{algorithmic}[1]
 \Require marker copies with $\{\vect{x}_i,V_i,M_i,Z_i,S_i\}$; trench reservoirs $\{W_k,L_k\}$; previous velocity $\vect{u}^{n-1}$
 \If{any marker flagged, any seam changed, or mesh quality below threshold}
-  \State \Call{Adapt}{} and rebuild the CDT with seams as constraints; assign copies to sectors
+  \State \Call{Adapt}{} and repair (Section~\ref{sec:meshupdate}): seam splits, chain merges, zips and snaps, interior collapses, splits and flips; assign copies to sectors
 \EndIf
 \State \Call{Geometry}{} \Comment{Algorithm~\ref{alg:geom}}
 \State \Call{ColumnState}{} \Comment{cell averages, limited gradients, $e_i$, $\Phi_i$; Algorithm~\ref{alg:column}}
@@ -713,6 +749,8 @@ so the plate reaches the terminal velocity this predicts when $\Gamma<1$, and ac
 
 \paragraph{9. Sensitivity.} Features reported as results must persist under resolution refinement, rebuild frequency, mesh-velocity parameters, adaptation thresholds, seam-event thresholds and persistence times, and comparison of GPU and reference implementations.
 
+\paragraph{10. Mesh update.} Prescribed rigid rotations (no solve), so that the geometry is known. A plate subducting at two trenches whose overriding plates converge on it must be consumed at the time the rates predict, with its two trenches zipping into one boundary between its neighbours, budgets closing to round-off, and a uniform state staying uniform through every zip and snap. Splitting seam edges must conserve integrals and slab reservoirs to round-off and keep every trench's polarity.
+
 %======================================================================
 \section{Status of the components}
 %======================================================================
@@ -727,6 +765,7 @@ Heat-deficit closure~\eqref{eq:cooling} & Exact for half-space cooling under dep
 Linear finite elements, vertex-centred finite volumes, CDT, split-node seams & Standard techniques\\
 Exact conservation and geometric conservation & Exact by construction; verified by tests 1--2\\
 Mesh velocity and adaptation criteria & Method choices affecting accuracy, not conservation\\
+Zip and snap (seams closer than a cell merge) & Modelling choice at the resolution limit: the merge rule for seam types; the timing is mesh-dependent\\
 Integrity law, strength coefficients $B_c$, $B_l$ & Modelling choices requiring physical justification\\
 Slab reservoir ($\tau_a$, $\xi$, $L_{\max}$) & Modelling choice; calibrate against observed plate speeds and their correlation with trench length\\
 Strain localisation with damage & Mesh-dependent unless $G$ contains a physical length scale; adaptivity amplifies this\\
