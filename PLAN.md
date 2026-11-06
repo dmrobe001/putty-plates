@@ -41,25 +41,15 @@ Substituted for now:
 - **Test 2, free stream** (uniform state, u = 0, smooth imposed mesh motion of up to 5% of a cell per Myr, 4 Myr):
   - Without maintenance: max |Δh|/h = 1.7 × 10⁻⁴. This doesn't shrink with dt, so it is geometric: triangles tilt as markers slide over a curved surface, and the planar geometric conservation law isn't exact there.
   - With maintenance: 1 × 10⁻², from the first-order remap.
-- **Mesh lifetime**: runs stop after 2–23 Myr with these seeds (earlier variants reached 30–96 Myr). Every stop is the same kind of event: a triangle whose vertices are all seam markers collapses near one or more triple junctions. Examples are two triple junctions one edge apart, or a four-plate trench junction present from t = 0. These are seam topology changes, which Assumption 8 of the document rules out.
+- **Mesh lifetime**: runs stop after 2–23 Myr with these seeds (earlier variants reached 30–96 Myr). Every stop is the same kind of event: a triangle whose vertices are all seam markers collapses near one or more triple junctions. Examples are two triple junctions one edge apart, or a four-plate trench junction present from t = 0. These are places where seams need to change topology; slice 1 has no seam events yet.
 - **Cost**: about 100–130 ms per simulated Myr on one CPU thread. Mesh maintenance and the rebuilds after it are more than half of that.
-
-## The decision that shapes everything after slice 2
-
-**How do seams change topology?** The document fixes seam topology for a run and lists self-organisation of boundaries as not attempted. On a whole planet with plates that move for hundreds of Myr, junctions migrate and merge, plates get consumed, and continents collide. Measured above: a fixed topology lasts tens of Myr at most, even with ideal kinematics. Options:
-
-1. **Short runs, re-seeded.** Run until a topology event, then let the user, or a rule, redraw the seams from the current state and continue. Simplest, and honest to the document.
-2. **Explicit topology events.** A small catalogue (junction migration along a seam, junction merge, plate death, continental collision becoming a suture, rift initiation), each a conservative local operation. This is where "history produces diversity" would come from, and it lies beyond the document.
-3. **Damage-driven boundaries.** Let the integrity field s and the velocity solve localise new weak zones, and promote them to seams. This is closest to the physics, and the document notes that the damage law is mesh-dependent.
-
-My recommendation: 1 now, so the physics slices can be tested on runs of fixed topology; then 2, one event type at a time, starting with plate death and suture.
 
 ## Candidate slices from here
 
-2. **Velocity solve, n = 1** (§1.5–1.6, §2.5, Alg. 4): Φ from eq. (phi), P1 stiffness in a per-triangle tangent frame, lumped drag, ridge free faces, seam coupling C_n and C_t. Solve with preconditioned conjugate gradient (PCG) in double precision on the CPU. Check: test 3 (patch test, planar sub-problem), test 4 (porous-medium spreading), drag-dominated limit u ≈ −∇Φ/β.
+2. **Velocity solve, n = 1** (§1.5–1.7, §2.5, Alg. 4): Φ from eq. (phi), P1 stiffness in a per-triangle tangent frame, lumped drag with the thickness-dependent β of eq. (drag), ridge free faces, seam coupling C_n and C_t. Solve with preconditioned conjugate gradient (PCG) in double precision on the CPU. Check: test 3 (patch test, planar sub-problem), test 4 (porous-medium spreading), drag-dominated limit u ≈ −∇Φ/β.
 3. **Slab reservoir and power-law creep** (§1.9, eq. visc): W and L per trench copy, Picard iteration. Check: test 7 (Γ < 1 terminal velocity, Γ > 1 runaway).
 4. **Second-order transport** (§2.3): least-squares gradients per seam side and the Barth–Jespersen limiter. Check: sharpness of continents after 100 Myr, and the free-stream test.
 5. **Exact remap** (§2.9): Sutherland–Hodgman intersection of old and new dual cells, replacing the area-share rule. Check: the free-stream error with maintenance drops to the no-maintenance level.
-6. **Topology events** (the decision above).
+6. **Seam life cycle** (§1.10, §2.8 "Seam events"): the buoyancy 𝒩 and thermal thickness δ per copy, persistence clocks per edge, then events in this order: slab breakoff (trench → transform), healing (transform → interior), ridge death, subduction initiation, rifting, and transform nucleation from damage. Check: test 8 (budgets across events; continent arriving at a trench; ridge opening in thinned lithosphere). Slab breakoff and healing alone should already remove most of the stops measured in slice 1.
 7. **WebGPU kernels** (§3): flux, column-state and element kernels in WGSL with gather instead of scatter and two-sum accumulation. Keep this JavaScript code as the double-precision reference (§3.6).
 8. **Sphere-exact geometry**: a geometric conservation law for moving flat triangles on a sphere (for example, the mesh-motion flux taken from swept areas projected on the tangent plane). Check: free-stream error at round-off without maintenance.

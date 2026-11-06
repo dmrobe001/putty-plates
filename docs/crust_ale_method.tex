@@ -17,7 +17,7 @@
 
 \title{A Conservative Vertex-Centred Arbitrary Lagrangian--Eulerian Method\\
 for Plate-Scale Lithospheric Deformation\\
-with Ridges, Trenches and Slab Pull}
+with Evolving Ridges, Transforms, Trenches and Slab Pull}
 \author{}
 \date{}
 
@@ -25,7 +25,7 @@ with Ridges, Trenches and Slab Pull}
 \maketitle
 
 \begin{abstract}
-We describe a numerical method for the large-scale horizontal deformation of continental and oceanic lithosphere, treated as a thin, isostatically compensated, power-law viscous sheet resting on a mantle that exerts basal drag. Each column of lithosphere is described by its crustal thickness, crustal density, heat deficit and integrity. A heat-balance integral closure makes the heat deficit evolve by conductive cooling without an explicit age field, so seafloor subsidence, ridge push and plate strengthening follow from the column physics. All state lives on moving markers, each owning the integrals of these quantities over its median dual cell. A constrained Delaunay triangulation of the markers carries no state and supports a linear finite element solution of the depth-integrated force balance. Plate boundaries are represented as seams of split markers, so that ridges, transforms and trenches coincide exactly with cell boundaries. Ridges create lithosphere; trenches consume it into a per-node slab reservoir whose negative buoyancy, less mantle drag, pulls on the subducting plate. Mass moves between cells only by fluxes through shared faces, so all budgets close to round-off. The method is a vertex-centred control volume finite element method (CVFEM) in arbitrary Lagrangian--Eulerian (ALE) form, and we include notes on implementing it in a web browser with WebGPU.
+We describe a numerical method for the large-scale horizontal deformation of continental and oceanic lithosphere, treated as a thin, isostatically compensated, power-law viscous sheet resting on a mantle that exerts basal drag. Each column of lithosphere is described by its crustal thickness, crustal density, heat deficit and integrity. A heat-balance integral closure makes the heat deficit evolve by conductive cooling without an explicit age field, so seafloor subsidence, ridge push and plate strengthening follow from the column physics. All state lives on moving markers, each owning the integrals of these quantities over its median dual cell. A constrained Delaunay triangulation of the markers carries no state and supports a linear finite element solution of the depth-integrated force balance. Plate boundaries are represented as seams of split markers, so that ridges, transforms and trenches coincide exactly with cell boundaries. Ridges create lithosphere; trenches consume it into a per-node slab reservoir whose negative buoyancy, less mantle drag, pulls on the subducting plate. Seams are not prescribed: they open where neighbouring columns slide past one another, become trenches where negatively buoyant lithosphere converges on them, become ridges where thin lithosphere diverges, lose their slab when positively buoyant lithosphere arrives at a trench, and heal where they stop slipping. Plates are simply the regions that seams enclose. Basal drag depends on local lithospheric thickness, so thick keels couple more strongly to the mantle than young, thin plates. Mass moves between cells only by fluxes through shared faces, so all budgets close to round-off. The method is a vertex-centred control volume finite element method (CVFEM) in arbitrary Lagrangian--Eulerian (ALE) form, and we include notes on implementing it in a web browser with WebGPU.
 \end{abstract}
 
 \tableofcontents
@@ -42,8 +42,8 @@ We describe a numerical method for the large-scale horizontal deformation of con
 \item \textbf{Column structure.} A column consists of a crust of thickness $h$ and uniform compositional density $\rho_c$, over mantle of density $\rho_m$. Compositional densities are quoted at mantle temperature $T_m$; the equivalent surface-temperature density is $\rho(1+\alpha\Delta T)$.
 \item \textbf{Thermal structure.} The temperature deficit $T_m-T$ has the self-similar half-space (error-function) profile. Thermal contraction is $\rho_m\alpha(T_m-T)$ throughout the column, including the crust (an error of order $\rho_c/\rho_m-1$ within the crust).
 \item \textbf{Rheology.} Incompressible power-law creep, with depth-integrated strength depending on crustal thickness, thermal thickness and a scalar integrity $s\in[0,1]$.
-\item \textbf{Basal drag} linear in velocity with coefficient $\beta(\vect{x})\ge0$, in the frame of the underlying mantle.
-\item \textbf{Plate boundaries} are prescribed polylines (seams) whose topology does not change during a run; their positions evolve.
+\item \textbf{Basal drag} linear in velocity, in the frame of the underlying mantle, with a coefficient $\beta\ge0$ that depends on the local lithospheric thickness (Section~\ref{sec:drag}).
+\item \textbf{Plate boundaries} are seams across which velocity may jump. Their positions move with the flow, and their existence and type follow local rules on the column state and the relative motion across them (Section~\ref{sec:lifecycle}).
 \end{enumerate}
 The model is planar. It excludes elastic flexure, depth-dependent flow such as lower-crustal channel flow, erosion and sedimentation, radiogenic heating, and three-dimensional slab dynamics, which are replaced by a reservoir model (Section~\ref{sec:slabmodel}).
 
@@ -142,6 +142,15 @@ The depth-integrated viscosity $\Hint=\int\eta\dd z$ is
 \end{equation}
 where $\sqrt\pi\,\Theta/\Delta T=\delta$ is the thermal thickness, $B_c$ and $B_l$ are strength coefficients for crust and thermal lithosphere, $n\approx3$, and $f(s)=s_{\min}+(1-s_{\min})s$. Cold, thick plates are strong; young lithosphere near ridges is weak.
 
+\subsection{Basal drag}
+\label{sec:drag}
+Drag is transmitted through the asthenosphere beneath the plate, so it depends on how deep the plate reaches. A simple closure uses the lithospheric thickness $H=h+\delta$, with $\delta=\sqrt\pi\,\Theta/\Delta T$ the thermal thickness:
+\begin{equation}
+  \beta(h,\Theta) = \beta_0\left[1+c_k\left(\frac{H}{H_0}\right)^{m}\right],
+  \label{eq:drag}
+\end{equation}
+with background coefficient $\beta_0$, reference thickness $H_0$, keel coefficient $c_k$ and exponent $m\ge1$. Thick continental keels are dragged strongly; young oceanic lithosphere, nearly decoupled, is free to move under small forces. Because $\beta$ depends on the state but not on $\vect u$, it adds no nonlinearity to the velocity solve.
+
 \subsection{Depth-integrated force balance}
 The depth-integrated deviatoric stress is
 \begin{equation}
@@ -149,7 +158,7 @@ The depth-integrated deviatoric stress is
 \end{equation}
 and horizontal force balance is
 \begin{equation}
-  \nabla\cdot\vect{T} - \beta(\vect{x})\,\vect{u} = \nabla\Phi .
+  \nabla\cdot\vect{T} - \beta\,\vect{u} = \nabla\Phi .
   \label{eq:momentum}
 \end{equation}
 On any free edge facing a column with potential $\Phi_f$, the traction is
@@ -179,18 +188,20 @@ With $D/Dt$ the material derivative,
 \end{align}
 where $G$ is a damage and healing law, for example $G=-k_d\edot_E s+k_h(1-s)$. The flux form of the $\Theta$ equation encodes thinning by stretching: divergence reduces $\Theta$ per unit area, exactly as uniform vertical thinning of the thermal profile requires.
 
-\subsection{Plate boundaries}
+\subsection{Plate boundaries and pair coupling}
 \label{sec:seams}
-Plate boundaries are \emph{seams}: curves across which velocity may jump. Each side of a seam is a separate face with outward normal pointing across the seam. Three types are used.
+Plate boundaries are \emph{seams}: curves across which velocity may jump. Each side of a seam is a separate face with outward normal pointing across the seam.
+
+A seam is the limit of weakened coupling between neighbouring columns rather than a separate kind of object. Across any face, a velocity jump $\Delta\vect{u}$ is resisted by the traction
+\begin{equation}
+  \vect{t} = C_n(s)\,(\Delta\vect{u}\cdot\vect{n})\,\vect{n} + C_t(s)\,(\Delta\vect{u}\cdot\vect{t})\,\vect{t},
+  \label{eq:interface}
+\end{equation}
+in the seam frame $(\vect{n},\vect{t})$, with coefficients that fall as the integrity $s$ of the adjacent columns falls. Intact material has coefficients so large that the jump vanishes, and the face is simply interior: its markers are not split, and the sheet is continuous there. Once damage has lowered the coupling far enough, the face is represented as a seam. Three seam types are used; the transform is the default, and the other two add sources or sinks of lithosphere.
 
 \paragraph{Ridge.} The two faces are uncoupled. Each is a free edge facing a zero-age ridge column, so~\eqref{eq:freeedge} applies with $\Phi_f=\Phi_r$. New lithosphere enters each face with state $(h_{oc},\rho_{oc},\Theta=0,s=1)$ at the rate at which the plate moves away from the seam. The spreading rate is not imposed; it results from the force balance.
 
-\paragraph{Transform.} The faces may slide past each other but may not separate. Across a transform, with velocity jump $\Delta\vect{u}$ and seam frame $(\vect{n},\vect{t})$, the traction is
-\begin{equation}
-  \vect{t} = C_n\,(\Delta\vect{u}\cdot\vect{n})\,\vect{n} + C_t\,(\Delta\vect{u}\cdot\vect{t})\,\vect{t},
-  \label{eq:interface}
-\end{equation}
-with $C_n$ a large penalty and $C_t$ small. Material may be exchanged between the two faces if they converge or separate slightly.
+\paragraph{Transform.} The faces may slide past each other but barely separate: the traction~\eqref{eq:interface} applies with $C_n$ a large penalty and $C_t$ small. Material may be exchanged between the two faces if they converge or separate slightly.
 
 \paragraph{Trench.} One face belongs to the subducting plate, the other to the overriding plate. The seam moves with the overriding plate, so the overriding face is a material boundary. The subducting face is an outflow boundary: material leaves the sheet at the subduction rate
 \begin{equation}
@@ -206,12 +217,41 @@ The slab is represented, per unit trench length, by its negative buoyancy $W$ an
   \qquad \frac{dL}{dt} = v_s ,
   \label{eq:slab}
 \end{equation}
-where $\Theta_{\mathrm{tr}}$ is the heat deficit of lithosphere arriving at the trench and $\tau_a$ is a thermal assimilation time. Optionally, input stops once $L$ exceeds $L_{\max}$ (the slab reaching the transition zone). The net line force on the subducting face is
+where $\Theta_{\mathrm{tr}}$ is the heat deficit of lithosphere arriving at the trench and $\tau_a$ is a thermal assimilation time. Optionally, input stops once $L$ exceeds $L_{\max}$ (the slab reaching the transition zone). When the lithosphere arriving at the trench is no longer negatively buoyant, the slab breaks off (Section~\ref{sec:lifecycle}): its reservoir is released to the mantle and stops pulling. The net line force on the subducting face is
 \begin{equation}
   \vect{f}_{\mathrm{slab}} = \big(W - \xi\,(\vect{u}_{\mathrm{sub}}\cdot\vect{n})\big)\,\vect{n},
   \label{eq:slabforce}
 \end{equation}
 gravitational pull less mantle drag on the sinking slab, with drag coefficient $\xi$ acting on the subducting plate's velocity in the mantle frame. The slab's pull therefore builds up from the actual thermal state of the lithosphere that subducted.
+
+\subsection{Seam life cycle}
+\label{sec:lifecycle}
+Seams are created, change type and heal according to the state on either side and the relative motion across them. Two column quantities carry most of the decisions. The net negative buoyancy per unit area,
+\begin{equation}
+  \mathcal{N} = \rho_m\alpha\,\Theta - h\,(\rho_m-\rho_c),
+  \label{eq:buoy}
+\end{equation}
+is positive when the column, thermal contraction included, is denser than the mantle it would sink into: old oceanic lithosphere has $\mathcal{N}>0$, while continents and very young oceanic lithosphere have $\mathcal{N}<0$. The thermal thickness $\delta=\sqrt\pi\,\Theta/\Delta T$ measures how cold and strong the plate is. Across a face, the relative velocity $\Delta\vect u$ separates into opening rate $v_o=\Delta\vect u\cdot\vect n$ and slip rate $v_t=\Delta\vect u\cdot\vect t$.
+
+\begin{center}
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+Event & From $\to$ to & Condition\\
+\midrule
+Transform nucleation & interior $\to$ transform & integrity below $s_{\mathrm{seam}}$ along a connected path (sustained shear)\\
+Subduction initiation & transform $\to$ trench & $v_o<-v_c$ and $\mathcal{N}>\mathcal{N}_c$ on at least one side\\
+Rifting & interior or transform $\to$ ridge & $v_o>v_r$ and $\delta<\delta_r$ on both sides\\
+Slab breakoff & trench $\to$ transform & arriving lithosphere has $\mathcal{N}\le0$\\
+Ridge death & ridge $\to$ transform & $v_o<v_r'$, or $\delta>\delta_r'$ at the seam\\
+Healing & transform $\to$ interior & $|\Delta\vect u|<v_h$ and integrity recovered above $s_{\mathrm{heal}}$\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+At subduction initiation, the side with the larger $\mathcal N$ subducts. Each condition must hold for a persistence time before the event fires, and the thresholds for leaving a state differ from those for entering it ($v_r'<v_r$, $\delta_r'>\delta_r$, $s_{\mathrm{heal}}>s_{\mathrm{seam}}$), so that boundaries do not flicker. A ridge thus dies either because the plates stop separating or because the lithosphere at the axis has thickened. A trench lives only while it is fed with sinking lithosphere: when a continent or a young, buoyant ridge flank arrives, the slab detaches and the boundary carries on as a transform, which may later heal or, if dense lithosphere converges on it again, start a new trench.
+
+Plates are not tracked as objects. A plate is a connected region bounded by seams; plates appear when seams link up into closed loops, and disappear when they are consumed or when the seams around them heal.
 
 \subsection{Dimensionless groups}
 With length scale $L_0$, velocity scale $U$ and a representative strength $\Bint_0$:
@@ -222,7 +262,7 @@ With length scale $L_0$, velocity scale $U$ and a representative strength $\Bint
   \qquad
   \Gamma = \frac{\tau_a\,g\rho_m\alpha\,\Theta_{\mathrm{tr}}}{\xi + \beta A_p/\ell_{\mathrm{tr}}}.
 \end{equation}
-The Argand number $\mathrm{Ar}$ compares buoyancy forces ($\Delta\Phi$, a representative GPE contrast) with viscous forces. The drag length $\ell_d$ is the distance over which membrane stresses are transmitted before basal drag absorbs them; the mesh must resolve it. The slab feedback number $\Gamma$ (with $A_p$ the plate area and $\ell_{\mathrm{tr}}$ its trench length) compares how fast slab pull grows with subduction rate against how fast resistance grows: for a rigid plate, steady subduction is stable only for $\Gamma<1$ (Section~\ref{sec:verification}).
+The Argand number $\mathrm{Ar}$ compares buoyancy forces ($\Delta\Phi$, a representative GPE contrast) with viscous forces. The drag length $\ell_d$ is the distance over which membrane stresses are transmitted before basal drag absorbs them; the mesh must resolve it. With thickness-dependent drag~\eqref{eq:drag} it is shortest under thick keels. The slab feedback number $\Gamma$ (with $A_p$ the plate area and $\ell_{\mathrm{tr}}$ its trench length) compares how fast slab pull grows with subduction rate against how fast resistance grows: for a rigid plate, steady subduction is stable only for $\Gamma<1$ (Section~\ref{sec:verification}).
 
 %======================================================================
 \section{Discretisation}
@@ -314,7 +354,7 @@ Triangle quantities ($h_c$, $\Theta_c$, $s_c$, $\tilde\Phi_c$) are averages of t
     &&\text{viscous stiffness ($6\times6$)},\label{eq:Kc}\\
   \vect{F}_{c,a} &= A_c\,\tilde\Phi_c\,\nabla\varphi_a
     &&\text{buoyancy load on vertex $a$},\\
-  \mathsf{M}_\beta &= \operatorname{diag}\big(\beta(\vect{x}_i)A_i\big)\otimes\vect{I}_2
+  \mathsf{M}_\beta &= \operatorname{diag}\big(\beta(h_i,\Theta_i)A_i\big)\otimes\vect{I}_2
     &&\text{lumped basal drag}.
 \end{align}
 The free-edge condition~\eqref{eq:freeedge} with $\Phi_f=\Phi_r$ is the natural boundary condition of this form; it holds on ridge faces with no additional code. A free face whose facing column differs from the ridge column receives the extra traction $(\Phi_r-\Phi_f)\vect{n}$.
@@ -404,6 +444,16 @@ with $\Theta_i$ floored at zero and $\edot_{E,i}$ the area-weighted average over
 \end{equation}
 Since $\Delta Z_k/\ell_k=\Theta_{\mathrm{tr}}v_s\Delta t$, this is~\eqref{eq:slab} integrated over the step.
 
+\subsection{Seam events}
+\label{sec:events}
+The life-cycle conditions of Section~\ref{sec:lifecycle} are evaluated on triangle edges and seam edges after each step, using the column state of the copies on either side and the relative velocity at the edge midpoint. Each edge keeps a persistence clock per candidate event. Events change only which edges are seams, how markers are split into copies, and edge labels; they never change a stored integral except by moving it between copies of the same marker.
+\begin{itemize}
+\item \textbf{Opening a seam} along a chain of interior edges splits each marker on the chain into one copy per new sector. The marker's integrals are divided among its copies in proportion to the areas of their dual cells, which keeps the cell averages unchanged.
+\item \textbf{Healing} merges the copies of each marker on the chain into one, summing their integrals.
+\item \textbf{Changing type} relabels edges. A new trench face starts with an empty reservoir ($W=L=0$). At slab breakoff, $W$ and $L$ are released, and the released slab is recorded in the slab budget.
+\end{itemize}
+Junctions need no special treatment: a marker where three or more seams meet simply has three or more copies. Seam edges become constraints of the triangulation at the next rebuild.
+
 \subsection{Adaptive insertion and deletion}
 \paragraph{Criteria.} A marker is flagged for refinement when $\sqrt{A_i}$ exceeds a fraction of the local feature scale, for example $\sqrt{A_i}|\vect{G}^h_i|/h_i>\tau_r$, $\sqrt{A_i}|\vect{G}^\Theta_i|/\Theta_i>\tau_r$, or $\sqrt{A_i}>\lambda\ell_{d,i}$. It is flagged for coarsening at a smaller threshold $\tau_c<\tau_r$. Neighbouring cell sizes are kept within a factor of about $1.5$, refinement is capped at $A_{\min}$, and seams are kept resolved more finely than the plate interiors around them.
 
@@ -423,7 +473,7 @@ New cells tile the cavity exactly and each old reconstruction integrates to its 
 \caption{One time step}\label{alg:step}
 \begin{algorithmic}[1]
 \Require marker copies with $\{\vect{x}_i,V_i,M_i,Z_i,S_i\}$; trench reservoirs $\{W_k,L_k\}$; previous velocity $\vect{u}^{n-1}$
-\If{any marker flagged, or mesh quality below threshold}
+\If{any marker flagged, any seam changed, or mesh quality below threshold}
   \State \Call{Adapt}{} and rebuild the CDT with seams as constraints; assign copies to sectors
 \EndIf
 \State \Call{Geometry}{} \Comment{Algorithm~\ref{alg:geom}}
@@ -434,6 +484,7 @@ New cells tile the cavity exactly and each old reconstruction integrates to its 
 \State \Call{FluxUpdate}{$\vect{u},\vect{w},\Delta t$} \Comment{Algorithm~\ref{alg:flux}}
 \State $\vect{x}_i\gets\vect{x}_i+\Delta t\,\vect{w}_i$
 \State \Call{Sources}{$\Delta t$} \Comment{Algorithm~\ref{alg:sources}}
+\State \Call{SeamEvents}{$\Delta t$} \Comment{Section~\ref{sec:events}; flags a rebuild if any seam changed}
 \State check all budgets to round-off
 \end{algorithmic}
 \end{algorithm}
@@ -477,7 +528,7 @@ New cells tile the cavity exactly and each old reconstruction integrates to its 
 \caption{\textsc{SolveVelocity}: Picard iteration}\label{alg:solve}
 \begin{algorithmic}[1]
 \Require initial guess $\vect{u}^{(0)}$; tolerance $\delta$; relaxation $\omega\in(0,1]$
-\State assemble $\vect{F}$ (buoyancy, free-face, slab, suction terms) and $\mathsf{M}_\beta$
+\State assemble $\vect{F}$ (buoyancy, free-face, slab, suction terms) and $\mathsf{M}_\beta$ from $\beta(h_i,\Theta_i)$
 \State assemble the constant seam terms (coupling $\mathsf{C}_k$, slab drag $\xi$)
 \For{$k=0,1,2,\dots$}
   \For{each triangle $c$}
@@ -642,7 +693,9 @@ Each test exercises a distinct component and has an exact or algebraic answer.
 \end{equation}
 so the plate reaches the terminal velocity this predicts when $\Gamma<1$, and accelerates without bound otherwise. Both regimes should be reproduced, and the approach to steady state should take a few $\tau_a$.
 
-\paragraph{8. Sensitivity.} Features reported as results must persist under resolution refinement, rebuild frequency, mesh-velocity parameters, adaptation thresholds, and comparison of GPU and reference implementations.
+\paragraph{8. Seam events.} Budgets close to round-off across every split, merge and relabelling. Two scenarios check the rules: a plate carrying a continent into a trench must lose its slab when the continent arrives, after which slab pull vanishes and the plate decelerates over a few $\tau_a$; and a plate pulled apart until its lithosphere thins must open a ridge where $\delta$ first falls below $\delta_r$.
+
+\paragraph{9. Sensitivity.} Features reported as results must persist under resolution refinement, rebuild frequency, mesh-velocity parameters, adaptation thresholds, seam-event thresholds and persistence times, and comparison of GPU and reference implementations.
 
 %======================================================================
 \section{Status of the components}
@@ -661,8 +714,9 @@ Mesh velocity and adaptation criteria & Method choices affecting accuracy, not c
 Integrity law, strength coefficients $B_c$, $B_l$ & Modelling choices requiring physical justification\\
 Slab reservoir ($\tau_a$, $\xi$, $L_{\max}$) & Modelling choice; calibrate against observed plate speeds and their correlation with trench length\\
 Strain localisation with damage & Mesh-dependent unless $G$ contains a physical length scale; adaptivity amplifies this\\
-Self-organisation of plate boundaries & Not attempted: seams are prescribed; spontaneous plate generation is an open research problem\\
-Planar geometry & Global models require markers on a sphere (whose convex hull is the Delaunay triangulation) with per-triangle tangent frames\\
+Seam life cycle (nucleation, conversion, breakoff, healing) & Modelling choice: threshold rules with hysteresis and persistence times; where seams nucleate is mesh-dependent unless the thresholds are tied to physical length scales\\
+Thickness-dependent basal drag & Modelling choice; constrain $c_k$ and $m$ by the observed slowness of plates with large continental keels\\
+Planar geometry & Global models require markers on a sphere (whose convex hull is the Delaunay triangulation) with per-triangle tangent frames; flat triangles on a sphere then satisfy the geometric conservation law only approximately\\
 \bottomrule
 \end{tabular}
 \end{center}
