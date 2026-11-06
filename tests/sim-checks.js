@@ -1,16 +1,18 @@
 // Headless checks of the simulation inside index.html.
 // Run:  npm install && npx playwright install chromium && npm run check
-// Prints measurements; it does not assert, because the rules are still provisional.
+// Prints measurements. The verification tests are numbered as in crust_ale_method.tex.
 const { chromium } = require('playwright');
 const fs = require('fs'), path = require('path');
 
 const root = path.join(__dirname, '..');
-const page = '<!doctype html><html><head><meta charset="utf-8"></head><body>' + fs.readFileSync(path.join(root, 'index.html'), 'utf8') + '</body></html>';
+const page = '<!doctype html><html><head><meta charset="utf-8"></head><body>' +
+  fs.readFileSync(path.join(root, 'index.html'), 'utf8').replace('refreshLabels(); regenerate(); drawLegend(); requestAnimationFrame(frame);', 'refreshLabels(); drawLegend();') +
+  '</body></html>';
 const delaunator = fs.readFileSync(require.resolve('delaunator/delaunator.min.js'), 'utf8');
 
 (async () => {
-  const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
-  const p = await browser.newPage({ viewport: { width: 800, height: 600 } });
+  const browser = await chromium.launch();
+  const p = await browser.newPage();
   const errors = []; p.on('pageerror', e => errors.push(e.message));
   await p.route('**/delaunator.min.js', r => r.fulfill({ body: delaunator, contentType: 'application/javascript' }));
   await p.route('https://fonts.**', r => r.abort());
@@ -18,38 +20,36 @@ const delaunator = fs.readFileSync(require.resolve('delaunator/delaunator.min.js
   await p.goto('http://local/'); await p.waitForTimeout(300);
 
   const out = await p.evaluate(() => {
-    setRunning(false);
     const res = {};
-    // 1. Mesh: a closed triangulation of N points has exactly 2N - 4 triangles.
-    res.mesh = { N: W.N, triangles: W.M.T.length / 3, expected: 2 * W.N - 4 };
+    const sum = (w, k) => w[k].reduce((s, v) => s + v, 0);
+    const budget = w => { const B = w.budget; return {
+      V: (sum(w, 'V') - (B.V0 + B.Vc - B.Vs)) / B.V0,
+      M: (sum(w, 'M') - (B.M0 + B.Mc - B.Ms)) / B.M0,
+      Z: (sum(w, 'Z') - (B.Z0 + B.Zsrc - B.Zs)) / B.Z0 }; };
 
-    // 2. Rigid rotation: give every plate the same Euler vector; no rifts or sutures.
-    //    The continental centroid should turn by |omega| t and continental area should not change.
-    const base = { ...RULE }; RULE.riftTau = Infinity; RULE.sutureLen = 1e9;
-    res.rigid = [];
-    for (const vcm of [1, 5]) {
-      seed = 12345; regenerate();
-      const om = vcm * 10 / 6371, ax = [0.5, 0, Math.sqrt(0.75)];
-      for (const q of W.plates) if (q) q.w = ax.map(v => v * om);
-      const lon = () => { let x = 0, y = 0, z = 0, c = 0; for (let i = 0; i < W.N; i++) if (W.cont[i]) { x += W.M.P[3*i]; y += W.M.P[3*i+1]; z += W.M.P[3*i+2]; c++; }
-        const d = x*ax[0] + y*ax[1] + z*ax[2]; x -= d*ax[0]; y -= d*ax[1]; z -= d*ax[2];
-        const e1 = [ax[2], 0, -ax[0]], e2 = [ax[1]*e1[2] - ax[2]*e1[1], ax[2]*e1[0] - ax[0]*e1[2], ax[0]*e1[1] - ax[1]*e1[0]];
-        return [Math.atan2(x*e2[0] + y*e2[1] + z*e2[2], x*e1[0] + y*e1[1] + z*e1[2]), c]; };
-      const [a0, c0] = lon(); for (let s = 0; s < 50; s++) stepWorld(W, 2); resample(W, 0); const [a1, c1] = lon();
-      let da = a1 - a0; if (da < 0) da += 2 * Math.PI;
-      res.rigid.push({ speed_cm_per_yr: vcm, rotation_ratio_measured_over_expected: +(da / (om * 100)).toFixed(3), continental_area_change_pct: +(100 * (c1 - c0) / c0).toFixed(2) });
+    // Test 1 (budgets) and mesh lifetime: default rules, several seeds, until the mesh needs a topology change.
+    res.runs = [];
+    for (const seed of [11, 22, 33, 44]) {
+      const w = makeWorld({ seed, N: 8000, contFrac: 0.3, plates: 6, kappaM: 0.1, meshMode: 'lagrangian' });
+      const t0 = performance.now(); let worst = { V: 0, M: 0, Z: 0 };
+      while (!w.exhausted && w.t < 300) { advance(w, 1); const b = budget(w); for (const k in b) worst[k] = Math.max(worst[k], Math.abs(b[k])); }
+      res.runs.push({ seed, lasted_Myr: +w.t.toFixed(1), stop: w.exhausted ? w.fail : 'ran to 300 Myr', ms_per_Myr: Math.round((performance.now() - t0) / w.t),
+        worst_budget_error: Object.fromEntries(Object.entries(worst).map(([k, v]) => [k, +v.toExponential(1)])), ops: w.ops });
     }
-    Object.assign(RULE, base);
 
-    // 3. Long runs with default rules: plate count, continental share, continental elevation.
-    res.history = [];
-    for (const sd of [7919, 15838]) {
-      seed = sd; regenerate(); const row = { seed: sd, samples: [] };
-      for (let s = 0; s < 750; s++) { stepWorld(W, 2); if (s % 125 === 124) {
-        let n = 0, c = 0; for (const q of W.plates) if (q && q.alive) { n++; c += q.cont; }
-        const e = []; for (let i = 0; i < W.N; i++) if (W.cont[i]) e.push(elevOf(W, i)); e.sort((a, b) => a - b);
-        row.samples.push({ t_Myr: Math.round(W.t), plates: n, continental: +(c / W.N).toFixed(3), cont_elev_p95_km: +e[Math.floor(e.length * .95)].toFixed(2) }); } }
-      res.history.push(row);
+    // Test 2 (free-stream preservation): uniform state, u = 0, a smooth imposed motion of interior markers,
+    // no sources. Exact in the plane by the geometric conservation law. Reported separately without and
+    // with mesh maintenance, whose remap is first order.
+    res.freeStream = [];
+    for (const maintain of [false, true]) {
+      const w = makeWorld({ seed: 5, N: 8000, contFrac: 0, plates: 4, kappaM: 0, meshMode: 'lagrangian' });
+      w.omega = w.omega.map(() => [0, 0, 0]); w.noSources = true; w.noMaintain = !maintain;
+      for (let c = 0; c < w.CM.length; c++) { const A = w.A[c]; w.V[c] = 7 * A; w.M[c] = 7 * 2900 * A; w.Z[c] = 5e4 * A; w.S[c] = 7 * A; }
+      const a = [0.3, -0.5, 0.8], b = [0.6, 0.2, -0.1], s = 0.05 * w.L0; // up to 5% of a cell per Myr
+      w.extraW = (x, y, z) => { const f = Math.sin(3 * (b[0]*x + b[1]*y + b[2]*z)); return [s * f * (a[1]*z - a[2]*y), s * f * (a[2]*x - a[0]*z), s * f * (a[0]*y - a[1]*x)]; };
+      let maxErr = 0;
+      while (w.t < 4 - 1e-9) { advance(w, Math.min(0.5, 4 - w.t)); for (let c = 0; c < w.CM.length; c++) maxErr = Math.max(maxErr, Math.abs(w.V[c] / w.A[c] - 7) / 7); }
+      res.freeStream.push({ maintenance: maintain, Myr: 4, max_relative_h_error: +maxErr.toExponential(2), ops: w.ops });
     }
     return res;
   });

@@ -1,47 +1,65 @@
 # Plan
 
-The algorithm document (LaTeX) has not been received yet. Slice 0 was built without it, so the rules below are placeholders, chosen to get a moving, inspectable planet on screen. Once the document arrives, slices 1 and later get rewritten around it.
+The method is `docs/crust_ale_method.tex`: a conservative, vertex-centred arbitrary Lagrangian–Eulerian (ALE) scheme for a thin viscous lithospheric sheet. Markers own dual-cell integrals, triangles carry no state, plate boundaries are seams of split markers, and velocity comes from a depth-integrated force balance. Below, the document is cut into slices that each end in something visible. Section numbers refer to the document.
 
-## Slice 0: kinematic skeleton (done)
+Two kinds of statement appear here. **Measured** means reproduced by `tests/sim-checks.js`. **Conjecture** or **choice** means not yet tested.
 
-**Mesh.** N jittered Fibonacci points on the unit sphere. The spherical Delaunay triangulation comes from projecting stereographically from one point and triangulating in the plane (circles map to circles, so the Delaunay property carries over). The adjacency is stored in compressed sparse row (CSR) form.
+## Slice 0 (superseded)
 
-**State on the fixed mesh (Eulerian).** Per vertex: plate id, crust type (continental or oceanic), crust age in Myr, and an "uplift" field in km.
+A rule-based toy (Eulerian nearest-neighbour resampling, scripted rifting and suturing), used only to stand up the renderer and controls. Kept in git history (`53fd7ab`).
 
-**Plate motion.** Each plate has an Euler (angular-velocity) vector ω and accumulates a pending rotation. Once a plate's pending rotation reaches 1.5 cell spacings, its material is resampled onto the mesh (semi-Lagrangian). Each vertex is traced back through the plate's rotation, and its nearest vertex is found by a greedy walk on the Delaunay graph. Plates below the threshold keep accumulating motion, and the renderer draws them at their pending position, so motion looks continuous.
+## Slice 1: the data model and conservative transport, on a sphere, with prescribed velocity (done)
 
-**Interaction rules (placeholders).**
+Implemented from the document:
 
-1. *Overlap* (several plates claim one vertex): the most buoyant crust wins. Continental beats oceanic, and younger ocean beats older.
-   - Continental winner over continental loser: collision. The winner gains uplift, and the pair accumulates suture contact.
-   - Any other loser: subduction. The winner gains arc uplift.
-2. *Gap* (no plate claims a vertex): new oceanic crust with age 0, i.e. a ridge.
-3. *Ocean depth* = −2.6 − 0.33·√age km, floored at −6.4 (half-space-cooling-like).
-4. *Erosion*: uplift decays with a 200 Myr time constant and diffuses (κ = 900 km²/Myr).
-5. *Arc accretion*: oceanic crust with more than 1.5 km of uplift, built up above −2 km, becomes continental. Elevation stays continuous through the conversion.
-6. *Suturing*: once two plates' continental contact reaches 1000 km × 250 km of convergence (with a 25 Myr memory), they weld. The merged plate's ω is the area-weighted mean.
-7. *Rifting*: each plate rifts as a Poisson process with rate (A_k/A)² · (0.5 + its continental share) / 2 Myr. The cut follows a low-noise flood fill between two distant seeds, and the halves get opposite rotations about the axis between the seeds (2–5 cm/yr opening).
+| Document | Code (`index.html`) |
+| --- | --- |
+| Column state h, ρc, Θ, s; integrals V, M, Z, S per marker copy (§1.2, §2.2) | `makeWorld`, `w.V/M/Z/S` |
+| Thermal closure, exact step update with basal flux q_b (§1.3, eq. coolexact) | `step` → sources |
+| Isostasy with water loading, e₀ from the ridge depth (§1.4) | `elevation` |
+| Seams as split markers, one copy per angular sector (§2.1) | union-find in `makeWorld`, `deriveCopies` |
+| Median dual cells, internal segments, seam face segments (§2.1, Alg. 2) | `computeAreas`, `fluxes` |
+| Mesh velocity: material + smoothing; ridge = mean, trench = overriding copy (§2.6) | `meshVelocity` |
+| Flux update at midpoint geometry, upwind, first order (φ = 0) (§2.7, Alg. 5) | `fluxes` |
+| Ridge inflow, trench outflow, transform exchange (§2.7) | `fluxes` |
+| Time-step halving on inversion or over-draining (§2.7) | `step` |
+| Budgets V, M, Z tracked against created / subducted / cooling source (§2.2) | `w.budget`, panel |
 
-Rule 7's area-squared hazard is what keeps the plate count from collapsing. There is no target count. Welding and rifting balance at a count that depends on the configuration.
+Substituted for now:
 
-### Measured (from `tests/sim-checks.js`, 20,000 vertices, 2 Myr steps)
+- **Velocity is prescribed**: u = ω_plate × x, with random Euler poles. There is no force balance, Φ, viscosity or slab yet.
+- **Sphere**: markers live on the unit sphere. Dual cells use flat triangles, and markers are re-projected after each move. (Document §5, last row.)
+- **Mesh adaptation**: local operations stand in for Adapt plus a constrained Delaunay triangulation (CDT) rebuild. Interior markers collapse when an altitude falls below 0.3 cell, interior edges split above 1.6 cells, and non-seam edges flip toward Delaunay. Chain markers merge into a chain neighbour (the document's "merge along the chain"). Seams are never crossed by a flip or split.
+- **Remap**: one first-order rule for every operation, applied per seam side. A removed copy hands over everything, losers hand over cell average × area lost, and gainers share the pool by area gained. It is conservative to round-off and keeps a uniform state uniform, but it is not the exact Sutherland–Hodgman intersection remap of §2.9.
+- **Deviation**: merging a chain marker moves the seam. The swept sliver's crust is transferred to the side that gains it, at the losing side's cell average. The document's seam refinement never moves the seam, so it has no rule for this.
+- **Junctions** (three or more copies) move with the least-squares velocity that best satisfies each incident seam's own rule (a McKenzie–Morgan construction). The document uses the plain average of copies.
+- **Initial state**: plates are additively weighted Voronoi regions; continents grow from random seeds to the requested area; seam types come from the initial relative motion (ridge, transform or trench) and stay fixed. The less continental plate subducts. Initial Θ is half-space cooling at an age set by distance from the nearest ridge.
 
-- The mesh closes: exactly 2N − 4 triangles.
-- Rigid rotation (every plate given the same ω): material turns 92.5% (1 cm/yr) and 96.3% (5 cm/yr) as far as it should over 100 Myr. Continental area changes by +0.03% and +2.4%.
-- Default rules, 2 seeds, 1500 Myr: the plate count stays between 11 and 25. Continental share drifts from 30% to about 20%. The 95th percentile of continental elevation is about 2 km, with peaks of 4–6 km.
+### Measured (8,000 markers, 6 plates, seeds 11/22/33/44)
 
-### Known artifacts
+- **Test 1, budgets**: the worst relative error in ΣV, ΣM and ΣZ over whole runs is below 10⁻¹⁴, across ridges, trenches and every mesh operation.
+- **Test 2, free stream** (uniform state, u = 0, smooth imposed mesh motion of up to 5% of a cell per Myr, 4 Myr):
+  - Without maintenance: max |Δh|/h = 1.7 × 10⁻⁴. This doesn't shrink with dt, so it is geometric: triangles tilt as markers slide over a curved surface, and the planar geometric conservation law isn't exact there.
+  - With maintenance: 1 × 10⁻², from the first-order remap.
+- **Mesh lifetime**: runs stop after 2–23 Myr with these seeds (earlier variants reached 30–96 Myr). Every stop is the same kind of event: a triangle whose vertices are all seam markers collapses near one or more triple junctions. Examples are two triple junctions one edge apart, or a four-plate trench junction present from t = 0. These are seam topology changes, which Assumption 8 of the document rules out.
+- **Cost**: about 100–130 ms per simulated Myr on one CPU thread. Mesh maintenance and the rebuilds after it are more than half of that.
 
-- **Near-pole stall.** Nearest-vertex resampling rounds sub-cell motion away. Material within roughly 20° of a plate's Euler pole moves too little, which is the source of the rotation deficit above.
-- **Continental area drift.** Continental collisions destroy crust faster than arc accretion makes it. Separately, buoyancy-wins resampling slightly grows continents at boundaries.
-- **Ragged boundaries.** Coastlines and plate edges are stair-stepped at the cell scale (about 160 km at 20,000 vertices).
-- The CPU does all the stepping, at about 5–9 ms per step for 20,000 vertices.
+## The decision that shapes everything after slice 2
 
-## Candidate next slices (to be replaced by the document's structure)
+**How do seams change topology?** The document fixes seam topology for a run and lists self-organisation of boundaries as not attempted. On a whole planet with plates that move for hundreds of Myr, junctions migrate and merge, plates get consumed, and continents collide. Measured above: a fixed topology lasts tens of Myr at most, even with ideal kinematics. Options:
 
-1. **Read the document and map it onto the code**: which state variables, which rules, and which time integrator. Write it as a table of document section → function.
-2. **Advection with no stall.** Options: keep sub-cell offsets per vertex, use Lagrangian particles with periodic remeshing, or stochastic barycentric sampling. Judge each by the rigid-rotation check (target: ratio ≥ 0.99, area drift < 0.5% per 100 Myr).
-3. **Physics for plate velocities** (driving forces, if the document defines them) in place of fixed Euler vectors.
-4. **Crust budget.** Thickness as a conserved field rather than a continental/oceanic flag, so that collisions conserve volume.
-5. **GPU stepping** (WebGL2 render-to-texture passes, or WebGPU compute) once the update rule is stable enough to be worth porting.
-6. **World parameters**: radius, sea level (or ocean volume), and planet-scale outputs (land fraction and hypsometry) reported as emergent statistics.
+1. **Short runs, re-seeded.** Run until a topology event, then let the user, or a rule, redraw the seams from the current state and continue. Simplest, and honest to the document.
+2. **Explicit topology events.** A small catalogue (junction migration along a seam, junction merge, plate death, continental collision becoming a suture, rift initiation), each a conservative local operation. This is where "history produces diversity" would come from, and it lies beyond the document.
+3. **Damage-driven boundaries.** Let the integrity field s and the velocity solve localise new weak zones, and promote them to seams. This is closest to the physics, and the document notes that the damage law is mesh-dependent.
+
+My recommendation: 1 now, so the physics slices can be tested on runs of fixed topology; then 2, one event type at a time, starting with plate death and suture.
+
+## Candidate slices from here
+
+2. **Velocity solve, n = 1** (§1.5–1.6, §2.5, Alg. 4): Φ from eq. (phi), P1 stiffness in a per-triangle tangent frame, lumped drag, ridge free faces, seam coupling C_n and C_t. Solve with preconditioned conjugate gradient (PCG) in double precision on the CPU. Check: test 3 (patch test, planar sub-problem), test 4 (porous-medium spreading), drag-dominated limit u ≈ −∇Φ/β.
+3. **Slab reservoir and power-law creep** (§1.9, eq. visc): W and L per trench copy, Picard iteration. Check: test 7 (Γ < 1 terminal velocity, Γ > 1 runaway).
+4. **Second-order transport** (§2.3): least-squares gradients per seam side and the Barth–Jespersen limiter. Check: sharpness of continents after 100 Myr, and the free-stream test.
+5. **Exact remap** (§2.9): Sutherland–Hodgman intersection of old and new dual cells, replacing the area-share rule. Check: the free-stream error with maintenance drops to the no-maintenance level.
+6. **Topology events** (the decision above).
+7. **WebGPU kernels** (§3): flux, column-state and element kernels in WGSL with gather instead of scatter and two-sum accumulation. Keep this JavaScript code as the double-precision reference (§3.6).
+8. **Sphere-exact geometry**: a geometric conservation law for moving flat triangles on a sphere (for example, the mesh-motion flux taken from swept areas projected on the tangent plane). Check: free-stream error at round-off without maintenance.
