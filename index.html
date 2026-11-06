@@ -212,7 +212,7 @@ kbd { font-family: var(--font-data); font-size: 0.72rem; border: 1px solid var(-
     <dt>Ridge · transform · trench</dt><dd id="sSeam">–</dd>
     <dt>Land above sea level</dt><dd id="sLand">–</dd>
     <dt>Speed median · max</dt><dd id="sSpeed">–</dd>
-    <dt>Solver iterations · residual</dt><dd id="sSolve">–</dd>
+    <dt>Solver iterations in passes · residual</dt><dd id="sSolve">–</dd>
     <dt>Crust created · subducted</dt><dd id="sFlux">–</dd>
     <dt>Budget error V · M · Z</dt><dd id="sBudget">–</dd>
     <dt>Splits · collapses · flips</dt><dd id="sOps">–</dd>
@@ -302,6 +302,13 @@ function orient(X, a, b, c) {
   const ux = X[3*b] - ax, uy = X[3*b+1] - ay, uz = X[3*b+2] - az, vx = X[3*c] - ax, vy = X[3*c+1] - ay, vz = X[3*c+2] - az;
   return (uy*vz - uz*vy) * (ax + X[3*b] + X[3*c]) + (uz*vx - ux*vz) * (ay + X[3*b+1] + X[3*c+1]) + (ux*vy - uy*vx) * (az + X[3*b+2] + X[3*c+2]);
 }
+// Area of the spherical triangle on the unit sphere (Van Oosterom–Strackee). Dual cells use these:
+// they tile the sphere exactly, so inserting or moving a marker never changes the total area.
+function sphArea(X, a, b, c) {
+  const ax = X[3*a], ay = X[3*a+1], az = X[3*a+2], bx = X[3*b], by = X[3*b+1], bz = X[3*b+2], cx = X[3*c], cy = X[3*c+1], cz = X[3*c+2];
+  const det = ax * (by*cz - bz*cy) + ay * (bz*cx - bx*cz) + az * (bx*cy - by*cx);
+  return 2 * Math.abs(Math.atan2(det, 1 + ax*bx + ay*by + az*bz + bx*cx + by*cy + bz*cz + cx*ax + cy*ay + cz*az));
+}
 function triArea(X, a, b, c) {
   const ux = X[3*b] - X[3*a], uy = X[3*b+1] - X[3*a+1], uz = X[3*b+2] - X[3*a+2], vx = X[3*c] - X[3*a], vy = X[3*c+1] - X[3*a+1], vz = X[3*c+2] - X[3*a+2];
   return 0.5 * Math.hypot(uy*vz - uz*vy, uz*vx - ux*vz, ux*vy - uy*vx);
@@ -361,7 +368,7 @@ function deriveCopies(w) {
 }
 function computeAreas(w) {
   const A = new Float64Array(w.CM.length), T = w.T, TC = w.TC, X = w.X;
-  for (let t = 0; t < w.TP.length; t++) { const a3 = triArea(X, T[3*t], T[3*t+1], T[3*t+2]) / 3; A[TC[3*t]] += a3; A[TC[3*t+1]] += a3; A[TC[3*t+2]] += a3; }
+  for (let t = 0; t < w.TP.length; t++) { const a3 = sphArea(X, T[3*t], T[3*t+1], T[3*t+2]) / 3; A[TC[3*t]] += a3; A[TC[3*t+1]] += a3; A[TC[3*t+2]] += a3; }
   w.A = A;
 }
 function computeU(w) {
@@ -382,9 +389,10 @@ const RHEO = {
   Bc: 1e26, Bl: 2e25,        // strength per km of crust and of thermal lithosphere (n = 1: Ĥ = ½ f(s)(Bc h + Bl δ)), N·s/m per km
   beta0: 1.5e14, ck: 3, H0: 150, mk: 3, // basal drag β = β0 [1 + ck (H/H0)^m], H = h + δ (eq. drag)
   Cn_tf: 1e23, Ct_tf: 1e20,  // transform: stiff normal penalty, weak shear coupling
-  Cn_tr: 1e19, Ct_tr: 1e21,  // trench: convergence is taken up by subduction; shear is a megathrust proxy
+  Cn_tr: 1e19, Ct_tr: 1e21,  // trench, converging: subduction takes up convergence; shear is a megathrust proxy
+                             // (an opening trench or a closing ridge uses the stiff Cn_tf: see seamContact)
   strength: 1,               // multiplier on Bc and Bl (UI)
-  tol: 1e-4, maxIter: 600, stepIter: 40, coarse: true // PCG: relative residual, first solve, per step after (warm-started)
+  tol: 1e-4, maxIter: 600, stepIter: 40, coarse: true, contactPasses: 4 // PCG: relative residual, first solve, per step after (warm-started)
 };
 function phiCol(h, rho, Th) { // eq. (phi), N/m
   const e = elevation(h, rho, Th), D = RHEO.D, M1 = Math.PI * Th * Th / (4 * PHYS.dT);
@@ -530,7 +538,42 @@ function strainRates(w, U) {
   return out;
 }
 
+// Normal contact state of each seam copy pair, from the current velocity. A seam absorbs normal
+// motion in one direction only: a trench consumes convergence, a ridge fills opening. Motion in the
+// other direction is resisted like intact material (stiff C_n). Transforms absorb neither.
+// stiff[2e + k] for endpoint k (0: sA, 1: sB) of seam edge e.
+function seamContact(w) {
+  const X = w.X, U = w.U, ns = w.sA.length, stiff = new Uint8Array(2 * ns);
+  for (let e = 0; e < ns; e++) {
+    const type = w.sT[e]; if (type === TRANSFORM) { stiff[2*e] = stiff[2*e+1] = 1; continue; }
+    if (!U) continue;
+    const a = w.sA[e], b = w.sB[e], mx = X[3*a] + X[3*b], my = X[3*a+1] + X[3*b+1], mz = X[3*a+2] + X[3*b+2];
+    const ex = X[3*b] - X[3*a], ey = X[3*b+1] - X[3*a+1], ez = X[3*b+2] - X[3*a+2];
+    const nx = ey*mz - ez*my, ny = ez*mx - ex*mz, nz = ex*my - ey*mx; // side 1 → side 2 (length irrelevant)
+    for (let k = 0; k < 2; k++) {
+      const c1 = w.sC[4*e + k], c2 = w.sC[4*e + 2 + k];
+      const closing = (U[3*c1] - U[3*c2]) * nx + (U[3*c1+1] - U[3*c2+1]) * ny + (U[3*c1+2] - U[3*c2+2]) * nz;
+      stiff[2*e + k] = type === TRENCH ? (closing < 0 ? 1 : 0) : (closing > 0 ? 1 : 0);
+    }
+  }
+  return stiff;
+}
+
+// Active-set iteration: solve with the current contact states, update them from the new velocity,
+// repeat until none changes (or a few passes; the next step continues from here).
 function solveVelocity(w, maxIter = RHEO.stepIter) {
+  let stiff = seamContact(w), passes = 0, iters = 0, changed = 0;
+  for (;;) {
+    solvePass(w, maxIter, stiff); passes++; iters += w.solve.iters;
+    const next = seamContact(w); changed = 0;
+    for (let i = 0; i < next.length; i++) if (next[i] !== stiff[i]) changed++;
+    stiff = next;
+    if (!changed || passes >= RHEO.contactPasses) break;
+  }
+  Object.assign(w.solve, { passes, iters, changed }); w.contact = stiff;
+}
+
+function solvePass(w, maxIter, stiff) {
   if (!w.vpat || w.vpat.topo !== w.topoVersion) w.vpat = velocityPattern(w);
   const P = w.vpat, K = P.K, nc = w.CM.length, X = w.X, E = markerBases(X);
   const h = new Float64Array(nc), th = new Float64Array(nc), pt = new Float64Array(nc);
@@ -569,15 +612,21 @@ function solveVelocity(w, maxIter = RHEO.stepIter) {
   for (let c = 0; c < nc; c++) { const k = 4 * P.mSlot[w.CM[c]][(c - w.cOff[w.CM[c]]) * (w.cOff[w.CM[c]+1] - w.cOff[w.CM[c]] + 1)];
     const b = dragBeta(h[c], th[c]) * w.A[c] * R_M * R_M; K[k] += b; K[k+3] += b; }
   // seams: pair coupling (eq. interface) lumped onto copy pairs, and the facing column's push on each face
+  if (w.bodyForce) for (let c = 0; c < nc; c++) { // test hook: force per unit area, N/m², as a 3-vector
+    const m = w.CM[c], o = 6 * m, f = w.bodyForce(X[3*m], X[3*m+1], X[3*m+2], w.CP[c]), a = w.A[c] * R_M * R_M;
+    F[2*c] += a * (f[0]*E[o] + f[1]*E[o+1] + f[2]*E[o+2]); F[2*c+1] += a * (f[0]*E[o+3] + f[1]*E[o+4] + f[2]*E[o+5]); }
+  // An open ridge pair is free and faces the ridge column, which is the natural condition: nothing to add.
   for (let e = 0; e < w.sA.length; e++) {
-    const type = w.sT[e]; if (type === RIDGE) continue; // ridge faces are free and face the ridge column: natural condition
-    const Cn = type === TRENCH ? RHEO.Cn_tr : RHEO.Cn_tf, Ct = type === TRENCH ? RHEO.Ct_tr : RHEO.Ct_tf;
+    const type = w.sT[e];
+    if (type === RIDGE && !stiff[2*e] && !stiff[2*e+1]) continue;
     const a = w.sA[e], b = w.sB[e];
     const mx = X[3*a] + X[3*b], my = X[3*a+1] + X[3*b+1], mz = X[3*a+2] + X[3*b+2];
     const ex = X[3*b] - X[3*a], ey = X[3*b+1] - X[3*a+1], ez = X[3*b+2] - X[3*a+2], len = Math.hypot(ex, ey, ez);
     let nx = ey*mz - ez*my, ny = ez*mx - ex*mz, nz = ex*my - ey*mx; const nl = Math.hypot(nx, ny, nz); nx /= nl; ny /= nl; nz /= nl; // side 1 → side 2
     const ell = 0.5 * len * R_M;
     for (const [k, m, p, q] of [[0, a, 0, 2], [1, b, 1, 3]]) {
+      const st = stiff[2*e + k]; if (type === RIDGE && !st) continue;
+      const Cn = st ? RHEO.Cn_tf : RHEO.Cn_tr, Ct = type === TRANSFORM ? RHEO.Ct_tf : type === TRENCH ? RHEO.Ct_tr : 0;
       const o = 6 * m, n1 = nx*E[o] + ny*E[o+1] + nz*E[o+2], n2 = nx*E[o+3] + ny*E[o+4] + nz*E[o+5], nn = Math.hypot(n1, n2), u1 = n1 / nn, u2 = n2 / nn;
       const c00 = ell * (Cn*u1*u1 + Ct*u2*u2), c01 = ell * (Cn - Ct) * u1*u2, c11 = ell * (Cn*u2*u2 + Ct*u1*u1);
       for (let r = 0; r < 4; r++) { const sl = 4 * P.seamSlot[8*e + 4*k + r], sg = r === 1 || r === 2 ? -1 : 1; K[sl] += sg*c00; K[sl+1] += sg*c01; K[sl+2] += sg*c01; K[sl+3] += sg*c11; }
@@ -647,7 +696,7 @@ function openForEdit(w) {
 // flip non-seam edges toward Delaunay. Seam edges are never touched, so seams stay exact.
 // Remap is conservative by construction (area-share of the removed or created cell), not the exact
 // polygon-intersection remap of the method.
-function triContribution(X, a, b, c) { return triArea(X, a, b, c) / 3; }
+function triContribution(X, a, b, c) { return sphArea(X, a, b, c) / 3; }
 
 // Conservative, first-order-consistent remap of a local patch change. oldT and newT are lists of
 // [m0, m1, m2, c0, c1, c2] (markers then copies). Each copy's dual area changes by Δ. A removed copy
@@ -655,7 +704,10 @@ function triContribution(X, a, b, c) { return triArea(X, a, b, c) / 3; }
 // copies that gain area share the pool in proportion to their gain. A uniform state stays uniform,
 // totals are conserved to round-off. Returns false (and changes nothing) if a surviving copy would
 // be left with no area. Callers apply it to one side of a seam at a time.
-function remapPatch(w, oldT, newT, removed) {
+// xfer (optional) carries area across a seam: { give: area } makes this side hand that much area's
+// worth of its pool to a virtual gainer and records it in xfer.got; { got } adds a previous side's
+// hand-over to this side's pool.
+function remapPatch(w, oldT, newT, removed, xfer = null) {
   const d = new Map(), add = (c, v) => d.set(c, (d.get(c) || 0) + v);
   for (const q of oldT) { const a3 = triContribution(w.X, q[0], q[1], q[2]); for (let r = 0; r < 3; r++) add(q[3 + r], -a3); }
   for (const q of newT) { const a3 = triContribution(w.X, q[0], q[1], q[2]); for (let r = 0; r < 3; r++) add(q[3 + r], a3); }
@@ -666,15 +718,16 @@ function remapPatch(w, oldT, newT, removed) {
     if (Aold + v < 1e-6 * w.L0 * w.L0) return false; // would orphan a copy
     if (v > 0) { gain.push([c, v]); G += v; }
   }
+  if (xfer && xfer.give > 0) { gain.push([-1, xfer.give]); G += xfer.give; xfer.got = {}; }
   if (!gain.length) return false;
   for (const key of ['V', 'M', 'Z', 'S']) {
-    const arr = w[key]; let pool = 0;
+    const arr = w[key]; let pool = xfer && xfer.got && !(xfer.give > 0) ? xfer.got[key] : 0;
     for (const [c, v] of d) {
       if (removed.has(c)) { pool += arr[c]; arr[c] = 0; }
       else if (v < 0) { const q = arr[c] * Math.min(1, -v / w.A[c]); arr[c] -= q; pool += q; }
     }
     let given = 0;
-    gain.forEach(([c, g], k) => { const q = k === gain.length - 1 ? pool - given : pool * g / G; arr[c] += q; given += q; });
+    gain.forEach(([c, g], k) => { const q = k === gain.length - 1 ? pool - given : pool * g / G; if (c < 0) xfer.got[key] = q; else arr[c] += q; given += q; });
   }
   return true;
 }
@@ -801,16 +854,15 @@ function maintain(w) {
         if (!ok) continue;
         // dry-run both sides first so that a refusal leaves the state untouched
         const snap = [...sides.keys()].flatMap(ca => [...new Set(sides.get(ca).oldT.flatMap(q => q.slice(3)))]).map(c => [c, w.V[c], w.M[c], w.Z[c], w.S[c]]);
-        // Removing a chain marker moves the seam: the sliver (x, a, j) changes plate. The side that gains
-        // that area takes the crust in it from the other side, at that side's cell average (deviation from
-        // the method, whose seam refinement never moves the seam).
+        // Removing a chain marker moves the seam: the sliver (x, a, j) changes plate. The side that loses
+        // that area hands the crust in it to the other side out of its remap pool, at its own cell
+        // averages (deviation from the method, whose seam refinement never moves the seam).
         {
-          const [[c1, s1], [c2, s2]] = [...sides], area = sd => sd.newT.reduce((q, r) => q + triArea(w.X, r[0], r[1], r[2]), 0) - sd.oldT.reduce((q, r) => q + triArea(w.X, r[0], r[1], r[2]), 0);
-          const g1 = area(s1), g2 = area(s2), g = 0.5 * (g1 - g2), from = g > 0 ? c2 : c1, to = g > 0 ? c1 : c2;
-          const f = Math.min(1, Math.abs(g) / w.A[from]);
-          for (const key of ['V', 'M', 'Z', 'S']) { const q = w[key][from] * f; w[key][from] -= q; w[key][to] += q; }
+          const [[c1, s1], [c2, s2]] = [...sides], area = sd => sd.newT.reduce((q, r) => q + sphArea(w.X, r[0], r[1], r[2]), 0) - sd.oldT.reduce((q, r) => q + sphArea(w.X, r[0], r[1], r[2]), 0);
+          const g = 0.5 * (area(s1) - area(s2)), xfer = { give: Math.abs(g) };
+          const order = g > 0 ? [[c2, s2], [c1, s1]] : [[c1, s1], [c2, s2]]; // donor side first
+          for (const [ca, sd] of order) { if (!remapPatch(w, sd.oldT, sd.newT, new Set([ca]), xfer)) { ok = false; break; } xfer.give = 0; }
         }
-        for (const [ca, sd] of sides) if (!remapPatch(w, sd.oldT, sd.newT, new Set([ca]))) { ok = false; break; }
         if (!ok) { for (const [c, V, M, Z, S] of snap) { w.V[c] = V; w.M[c] = M; w.Z[c] = Z; w.S[c] = S; } continue; }
         for (const ca of map.keys()) w.cDead[ca] = 1;
         for (const cr of keep) { w.TC[cr] = map.get(w.TC[cr]); w.T[cr] = j; }
@@ -906,7 +958,7 @@ function makeWorld(params) {
     let gx = 0, gy = 0, gz = 0; for (let k = 0; k < 3; k++) { const m = w.T[3*t+k]; gx += X[3*m]; gy += X[3*m+1]; gz += X[3*m+2]; }
     const l = Math.hypot(gx, gy, gz); let best = Infinity, bk = 0;
     for (let k = 0; k < K; k++) { const s = seeds[k], d = Math.acos(Math.max(-1, Math.min(1, (gx*s[0] + gy*s[1] + gz*s[2]) / l))) - bias[k]; if (d < best) { best = d; bk = k; } }
-    w.TP[t] = bk;
+    w.TP[t] = params.plateOf ? params.plateOf(gx / l, gy / l, gz / l) : bk;
   }
   w.seeds = seeds;
   deriveTopology(w);
@@ -980,7 +1032,7 @@ function makeWorld(params) {
   for (let e = 0; e < types.length; e++) {
     const p1 = w.CP[w.sC[4*e]], p2 = w.CP[w.sC[4*e+2]], f1 = pc[p1] / pa[p1], f2 = pc[p2] / pa[p2];
     const sub = f1 < f2 ? p1 : f2 < f1 ? p2 : ((p1 * 31 + p2) % 2 ? p1 : p2);
-    w.seamInfo.set(KEY(w.sA[e], w.sB[e]), { type: types[e], sub: types[e] === TRENCH ? sub : -1 });
+    w.seamInfo.set(KEY(w.sA[e], w.sB[e]), params.seamOf ? params.seamOf(p1, p2) : { type: types[e], sub: types[e] === TRENCH ? sub : -1 });
   }
   deriveCopies(w);
   // Initial heat deficit: half-space cooling at an age set by hop distance from the nearest ridge.
@@ -988,9 +1040,11 @@ function makeWorld(params) {
   for (let e = 0; e < w.sA.length; e++) if (w.sT[e] === RIDGE) for (const m of [w.sA[e], w.sB[e]]) if (hop[m] < 0) { hop[m] = 0; q.push(m); }
   for (let qi = 0; qi < q.length; qi++) { const v = q[qi]; for (let p = w.incOff[v]; p < w.incOff[v + 1]; p++) { const u = w.nb[p]; if (hop[u] < 0) { hop[u] = hop[v] + 1; q.push(u); } } }
   for (let c = 0; c < w.CM.length; c++) {
-    const m = w.CM[c], isC = cont[m] >= 0, h = isC ? PHYS.h_cc : PHYS.h_oc, rho = isC ? PHYS.rho_cc : PHYS.rho_oc;
+    const m = w.CM[c], isC = cont[m] >= 0;
+    let h = isC ? PHYS.h_cc : PHYS.h_oc, rho = isC ? PHYS.rho_cc : PHYS.rho_oc;
     const tau = hop[m] < 0 ? 60 : hop[m] * w.L0 * R_KM / 25;
-    const Th = isC ? PHYS.Theta_ss : Math.min(PHYS.Theta_ss, 2 * PHYS.dT * Math.sqrt(PHYS.kappa * tau / Math.PI));
+    let Th = isC ? PHYS.Theta_ss : Math.min(PHYS.Theta_ss, 2 * PHYS.dT * Math.sqrt(PHYS.kappa * tau / Math.PI));
+    if (params.stateOf) ({ h, rho, Th } = params.stateOf(X[3*m], X[3*m+1], X[3*m+2], w.CP[c]));
     w.V[c] = h * w.A[c]; w.M[c] = rho * h * w.A[c]; w.Z[c] = Th * w.A[c]; w.S[c] = h * w.A[c];
   }
   maintain(w); // a Delaunay clean-up after seam straightening (flips only change areas, never integrals)
@@ -1119,11 +1173,7 @@ function fluxes(w, dt, Xh, Wm) {
       const side = w.sSub[e];
       for (const [c, sg, vx, vy, vz] of faces) {
         if ((sg === 1 ? 1 : 2) !== side) continue; // overriding face is material: no flux
-        const out = sg * (vx*nx + vy*ny + vz*nz);
-        if (out < 0) { // the subducting plate pulls away: the opening accretes like a ridge face (stands in for rifting, §1.10)
-          const q = -dt * out * len * PHYS.h_oc; dV[c] += q; dM[c] += PHYS.rho_oc * q; dS[c] += q; B.Vc += q; B.Mc += PHYS.rho_oc * q; continue;
-        }
-        const q = dt * out * len, dv = h[c] * q, dm = rho[c] * dv, dz = th[c] * q;
+        const out = sg * (vx*nx + vy*ny + vz*nz), q = dt * Math.max(0, out) * len, dv = h[c] * q, dm = rho[c] * dv, dz = th[c] * q;
         dV[c] -= dv; dM[c] -= dm; dZ[c] -= dz; dS[c] -= sI[c] * dv; B.Vs += dv; B.Ms += dm; B.Zs += dz;
       }
     } else { // transform: conservative exchange between facing copies
@@ -1435,7 +1485,7 @@ function refreshStats(land) {
   const km3 = R_KM * R_KM / 1e6; // V in km·sr → 10⁶ km³
   { const sp = []; for (let c = 0; c < w.CM.length; c++) sp.push(Math.hypot(w.U[3*c], w.U[3*c+1], w.U[3*c+2]) * R_KM / 10); sp.sort((a, b) => a - b);
     $('sSpeed').textContent = `${sp[sp.length >> 1].toFixed(1)} · ${sp[sp.length - 1].toFixed(1)} cm/yr`; }
-  $('sSolve').textContent = w.solve ? `${w.solve.iters} · ${w.solve.residual.toExponential(0)}` : '–';
+  $('sSolve').textContent = w.solve ? `${w.solve.iters} in ${w.solve.passes} · ${w.solve.residual.toExponential(0)}` : '–';
   $('sFlux').textContent = `${(B.Vc * km3).toFixed(1)} · ${(B.Vs * km3).toFixed(1)} M km³`;
   const eV = (sum('V') - (B.V0 + B.Vc - B.Vs)) / B.V0, eM = (sum('M') - (B.M0 + B.Mc - B.Ms)) / B.M0, eZ = (sum('Z') - (B.Z0 + B.Zsrc - B.Zs)) / B.Z0;
   $('sBudget').textContent = [eV, eM, eZ].map(v => v.toExponential(0)).join(' · ');

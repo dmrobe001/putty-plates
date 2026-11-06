@@ -34,12 +34,18 @@ The whole app is one file, `index.html`. It loads one script from a content deli
 
 ## Checks
 
-`tests/sim-checks.js` runs the page in headless Chromium and prints measurements, numbered as the verification tests in the method document: budgets over whole runs (test 1), free-stream preservation (test 2), rigid rotations being strain-free on the sphere (test 3), the drag-dominated limit u = −∇Φ/β (the instantaneous form of test 4), transform opening against C_n (test 6), the GPE drop against classical ridge push, plate speeds, solver iterations, and how long the mesh lasts before seams would need to change topology. The whole-planet runs at the start of the script take tens of minutes headless. They are a smoke test to run occasionally; the component checks are the ones to iterate against.
+Two scripts run the page in headless Chromium and print measurements, numbered as the verification tests in the method document.
+
+- `npm run check` (`tests/components.js`, a few seconds): component checks on small hand-built worlds. They cover one-sided seam coupling, transform opening against C_n (test 6), rigid rotations being strain-free on the sphere (test 3), the drag-dominated limit u = −∇Φ/β (the instantaneous form of test 4), the drop in gravitational potential energy (GPE) against classical ridge push, budgets (test 1) and free-stream preservation (test 2). Iterate against these.
+- `npm run check:planet` (`tests/planet.js`, tens of minutes headless): a whole-planet smoke test of budgets, speeds, solver effort and mesh lifetime for four seeds. Run it occasionally.
+
+`makeWorld` accepts `plateOf`, `seamOf` and `stateOf` to build test worlds by hand, and a world's `bodyForce` hook applies a test load.
 
 ```
 npm install
 npx playwright install chromium
 npm run check
+npm run check:planet
 ```
 
 Bit-for-bit reproducibility is not a goal: the simulation is seeded, but results may change with floating-point details and, later, with graphics processing unit (GPU) code paths.

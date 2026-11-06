@@ -3,7 +3,8 @@
   "private": true,
   "description": "Plate tectonics toy for generating Earth-adjacent worlds; the app is the single file index.html.",
   "scripts": {
-    "check": "node tests/sim-checks.js"
+    "check": "node tests/components.js",
+    "check:planet": "node tests/planet.js"
   },
   "devDependencies": {
     "delaunator": "5.0.1",

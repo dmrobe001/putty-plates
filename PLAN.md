@@ -2,7 +2,7 @@
 
 The method is `docs/crust_ale_method.tex`: a conservative, vertex-centred arbitrary Lagrangian–Eulerian (ALE) scheme for a thin viscous lithospheric sheet. Markers own dual-cell integrals, triangles carry no state, plate boundaries are seams of split markers, and velocity comes from a depth-integrated force balance. Below, the document is cut into slices that each end in something visible. Section numbers refer to the document.
 
-Two kinds of statement appear here. **Measured** means reproduced by `tests/sim-checks.js`. **Conjecture** or **choice** means not yet tested.
+Two kinds of statement appear here. **Measured** means reproduced by `npm run check` (component checks, `tests/components.js`) or `npm run check:planet` (whole-planet smoke test, `tests/planet.js`); measurements quoted for an earlier slice are as of that slice. **Conjecture** or **choice** means not yet tested.
 
 ## Slice 0 (superseded)
 
@@ -40,7 +40,7 @@ Substituted for now:
 - **Test 1, budgets**: the worst relative error in ΣV, ΣM and ΣZ over whole runs is below 10⁻¹⁴, across ridges, trenches and every mesh operation.
 - **Test 2, free stream** (uniform state, u = 0, smooth imposed mesh motion of up to 5% of a cell per Myr, 4 Myr):
   - Without maintenance: max |Δh|/h = 1.7 × 10⁻⁴. This doesn't shrink with dt, so it is geometric: triangles tilt as markers slide over a curved surface, and the planar geometric conservation law isn't exact there.
-  - With maintenance: 1 × 10⁻², from the first-order remap.
+  - With maintenance: 1 × 10⁻² at the time. Most of it was the sliver-transfer bug fixed in slice 2 (see there).
 - **Mesh lifetime**: runs stop after 2–23 Myr with these seeds (earlier variants reached 30–96 Myr). Every stop is the same kind of event: a triangle whose vertices are all seam markers collapses near one or more triple junctions. Examples are two triple junctions one edge apart, or a four-plate trench junction present from t = 0. These are places where seams need to change topology; slice 1 has no seam events yet.
 - **Cost**: about 100–130 ms per simulated Myr on one CPU thread. Mesh maintenance and the rebuilds after it are more than half of that.
 
@@ -55,7 +55,8 @@ Implemented from the document:
 | β = β₀[1 + c_k(H/H₀)^m], H = h + δ (§1.7, eq. drag) | `dragBeta` |
 | P1 stiffness 2A Ĥ BᵀDB, buoyancy load A Φ̃ ∇φ, lumped drag (§2.5) | `solveVelocity`, `elementFrame` |
 | Free ridge faces as the natural condition; extra traction −Φ̃_f n on faces whose facing column is not the ridge column (§2.5) | seam loop in `solveVelocity` |
-| Pair coupling C_n, C_t lumped onto copy pairs (§2.5, eq. interface): transform stiff normal, weak shear; trench weak normal, moderate shear | seam loop in `solveVelocity` |
+| Pair coupling C_n, C_t lumped onto copy pairs (§2.5, eq. interface), one-sided in the normal direction (§1.8): stiff C_n for normal motion the seam cannot absorb (any at a transform, opening at a trench, closing at a ridge), free otherwise | `seamContact`, seam loop in `solvePass` |
+| Contact states updated from each iterate (Alg. 4) | `solveVelocity`, up to 4 passes |
 | PCG, warm-started from the previous velocity (§3.4, stage 2, in double precision on the CPU) | `solveVelocity` |
 
 Choices made here:
@@ -63,28 +64,47 @@ Choices made here:
 - **Sphere**: each triangle is treated in its own plane. Each marker carries a tangent basis, and each copy has two unknowns in it. A 2×2 map per vertex takes them into the triangle's plane. A rigid rotation of the sphere is then strain-free to round-off (measured below), so this is the sphere's version of the patch test.
 - **Preconditioner**: block Jacobi with one block per marker (all of its copies at once, so the stiff transform penalty between copies is inverted exactly), plus a coarse correction from each plate's three rigid rotations. The coarse space cuts iterations by only about 20%. At these parameters the drag length (about 2,000 km) is shorter than a plate, so the slow modes are below plate scale. That is a job for multigrid (with slice 7).
 - **Iteration budget**: the first solve runs to a relative residual of 10⁻⁴. After that each step does at most 40 iterations, warm-started, and convergence carries across steps.
-- **Opening trenches**: with no slab pull, some trenches open. The subducting face of an opening trench now accretes new lithosphere, as a ridge face does. Without this, the cells at the trench drained to 0.3 km of crust and moved at more than 100 cm/yr. This stands in for the life cycle's rifting rule (§1.10). The accreted volume counts as created, so the budgets still close.
+- **One-sided normal coupling** (added to the document, §1.8): a trench consumes convergence and a ridge fills opening; motion in the other direction is resisted like a transform. This replaces an earlier stopgap that let opening trenches accrete crust.
 - **Parameters** (`RHEO`): B_c = 10²⁶ and B_l = 2 × 10²⁵ N·s/m per km; β₀ = 1.5 × 10¹⁴ Pa·s/m, c_k = 3, H₀ = 150 km, m = 3; transform C_n = 10²³ and C_t = 10²⁰ N·s/m²; trench C_n = 10¹⁹ and C_t = 10²¹. With these, old ocean has a drag length √(Ĥ/β) ≈ 2,100 km. The UI exposes a strength multiplier and c_k.
 
-### Measured (8,000 markers, 6 plates)
+### Fixes to slice 1 found by the component checks
 
-- **Ridge push from Φ**: the drop in Φ from the ridge to ocean of age 10, 40 and 80 Myr is 0.92, 0.96 and 0.97 of the classical F_rp (eq. ridgepush). Isostatic columns have equal mass above −D to round-off once the thermal term is counted as added density.
-- **Continents**: Φ̃ is −0.33 × 10¹² N/m for a 35 km continent with a saturated heat deficit. These continents sit slightly below the ridge column in GPE (gravitational potential energy), so they don't collapse under their own weight; ridges push them.
-- **Rigid rotation (test 3 on the sphere)**: max ε̇_E/|ω| = 4 × 10⁻¹⁴.
-- **Drag-dominated limit** (negligible strength, one plate, smooth Θ, compared with u = −∇Φ/β): relative RMS error 2.4%, 1.2% and 0.58% at 2,000, 8,000 and 32,000 markers. First order.
-- **Transform (test 6)**: RMS opening over RMS slip is 9.3%, 1.9% and 0.9% at C_n × 1, 10 and 100. The floor is geometric: the initial seams zig-zag, and a kinked transform can't slip without opening at the kink. Excluding junctions doesn't change it.
-- **Speeds** at 10 Myr (seeds 11, 33, 44): median 2.2–2.6 cm/yr, 95th percentile 5–6 cm/yr, all driven only by ridge push and GPE contrasts.
-- **Solver**: a cold solve takes about 220 PCG iterations. With the 40-iteration cap, the velocity is within 0.1% of a tight solve. Converging each step to 10⁻⁴ instead gives 6 × 10⁻⁵, at about 1.6× the cost.
-- **Budgets (test 1)**: below 10⁻¹⁴ relative, as in slice 1.
-- **Necking**: where a plate is pulled apart, it thins, weakens and thins faster. A Newtonian sheet whose strength scales with its thickness, under a fixed pull, reaches zero thickness in finite time. Crust behind opening trenches falls to 3–5 km and speeds there grow from 7 to about 50 cm/yr over 20–50 Myr. The model is making rifts on its own. Turning them into ridges is the life cycle's job (slice 6). Slab pull (slice 3) would remove the pull that opens these trenches.
-- **Mesh lifetime**: seeds 11, 22, 33 and 44 stop at 51, 2.4, 13 and 37 Myr. With prescribed rotations they stop at 22.7, 12.7, 19.8 and 2.1 Myr. Stops are the same all-seam slivers at junctions as in slice 1. Seed 22's "drain" is a near-zero-area copy at such a sliver.
-- **Cost**: about 30 ms of assembly and 40 ms of maintenance per step, plus about 0.8 ms per PCG iteration. That is about 150 ms per simulated Myr while speeds are moderate. Necking zones shrink the time step, which pushes it to 400–900 ms per Myr.
+- **Sliver transfer at chain merges**: when a seam marker merges into its chain neighbour, the seam shifts and a sliver changes sides. The transfer took the sliver's crust only from the merging marker's copy, capped at that copy's content. When the sliver was larger than that cell, the excess stayed on the losing side. A uniform state then came out 24% too thick there and 10% too thin across the seam, at 2,000 markers. Now the losing side hands the sliver over out of its whole remap pool (`remapPatch`, `xfer`).
+- **Spherical dual areas**: dual cells use spherical-triangle areas, which tile the sphere exactly. With flat triangles, inserting a marker onto the sphere increases the total area, and the remap, being conservative, thins the new cell by 0.4–1% at 2,000 markers.
+- Together, free stream with maintenance (test 2) went from 22% to 0.10% at 2,000 markers, and from 1% to 0.06% at 8,000. That is now the same as without maintenance: 0.08% and 0.02%.
 
-## Candidate slices from here
+### Measured: components (`npm run check`, about 5 s)
 
-3. **Slab reservoir and power-law creep** (§1.9, eq. visc): W and L per trench copy, Picard iteration. Check: test 7 (Γ < 1 terminal velocity, Γ > 1 runaway).
-4. **Second-order transport** (§2.3): least-squares gradients per seam side and the Barth–Jespersen limiter. Check: sharpness of continents after 100 Myr, and the free-stream test.
-5. **Exact remap** (§2.9): Sutherland–Hodgman intersection of old and new dual cells, replacing the area-share rule. Check: the free-stream error with maintenance drops to the no-maintenance level.
-6. **Seam life cycle** (§1.10, §2.8 "Seam events"): the buoyancy 𝒩 and thermal thickness δ per copy, persistence clocks per edge, then events in this order: slab breakoff (trench → transform), healing (transform → interior), ridge death, subduction initiation, rifting, and transform nucleation from damage. Check: test 8 (budgets across events; continent arriving at a trench; ridge opening in thinned lithosphere). Slab breakoff and healing alone should already remove most of the stops measured in slice 1.
-7. **WebGPU kernels** (§3): flux, column-state and element kernels in WGSL with gather instead of scatter and two-sum accumulation. Keep this JavaScript code as the double-precision reference (§3.6).
-8. **Sphere-exact geometry**: a geometric conservation law for moving flat triangles on a sphere (for example, the mesh-motion flux taken from swept areas projected on the tangent plane). Check: free-stream error at round-off without maintenance.
+- **One-sided coupling** (two hemispheres split at the equator, Φ̃ = 0, pushed together or apart by a body force; closing rate relative to the same push with no coupling):
+
+  | Seam | Converge | Diverge |
+  | --- | --- | --- |
+  | trench | 0.88 | 0.002 |
+  | ridge | 0.002 | 1.00 |
+  | transform | 0.002 | 0.002 |
+
+  Contact states settle in one or two passes. The trench's 0.88 comes from its shear coupling acting on the zig-zag seam, where part of the closing motion is shear along individual edges.
+- **Transform (test 6)**, same world under a shear push: RMS opening over RMS slip is 2.1%, 0.77% and 0.35% at C_n × 1, 10 and 100. It falls more slowly than 1/C_n because the seam zig-zags, and a kinked transform can't slip without opening.
+- **Rigid rotation (test 3 on the sphere)**: max ε̇_E/|ω| = 3 × 10⁻¹⁴.
+- **Drag-dominated limit** (negligible strength, one plate, smooth Θ, against u = −∇Φ/β): relative RMS error 3.5% at 1,000 markers and 1.7% at 4,000. First order.
+- **Ridge push from Φ**: the drop in Φ from the ridge to ocean of age 10, 40 and 80 Myr is 0.92, 0.96 and 0.97 of the classical F_rp. Columns are isostatic to round-off.
+- **Continents**: Φ̃ is −0.33 × 10¹² N/m for a 35 km continent with a saturated heat deficit, slightly below the ridge column. They don't spread under their own weight.
+- **Budgets (test 1)**: 1,500 markers, 10 Myr, every mesh operation: 3 × 10⁻¹⁵.
+
+### Measured: whole planet (`npm run check:planet`), before one-sided coupling
+
+- **Speeds** at 10 Myr: median 2.2–2.6 cm/yr, 95th percentile 5–6 cm/yr, from ridge push and GPE contrasts alone.
+- **Solver**: a cold solve takes about 220 PCG iterations. The 40-iteration cap keeps velocity within 0.1% of a tight solve.
+- **Necking**: a stretched Newtonian sheet whose strength scales with thickness thins faster where it is already thin. Behind opening trenches crust fell to 3–5 km and speeds rose to about 50 cm/yr over 20–50 Myr.
+- **Mesh lifetime**: 51, 2.4, 13 and 37 Myr for seeds 11, 22, 33 and 44, stopped by all-seam slivers at junctions, as in slice 1.
+- **Cost**: about 150 ms per simulated Myr at 8,000 markers while speeds are moderate.
+
+## Next, in order
+
+Physics first (see "How we work" in the README). Each step comes with component checks on small hand-built worlds (`makeWorld` with `plateOf`, `seamOf`, `stateOf`; `w.bodyForce`).
+
+3. **Slab reservoir** (§1.9): W and L per trench copy, carried through maintenance; slab pull and slab drag ξ on the subducting face. Check: test 7 on a one-trench world (Γ < 1 terminal velocity, Γ > 1 runaway).
+4. **Rest of the rheology**: power-law creep with n = 3 (eq. visc), sharing the Picard loop with the contact states; damage and healing G(s, ε̇), f(s) in Ĥ, and C_n(s), C_t(s). Checks: a strip in uniform extension against the analytic power-law strain rate; damage growing under sustained shear and recovering when it stops, at the law's rates.
+5. **Seam life cycle** (§1.10, §2.8 "Seam events"): 𝒩 and δ per copy, persistence clocks, and the six events. Check: test 8 on hand-built worlds. Also test on a triple-junction world whether events remove the all-seam slivers that end runs. That they would is a conjecture from slice 1, not yet tested.
+
+Numerics, only when stability or looks need them: second-order transport (§2.3), the exact intersection remap (§2.9), a geometric conservation law exact on the sphere, WebGPU kernels and multigrid (§3).

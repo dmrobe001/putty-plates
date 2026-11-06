@@ -199,7 +199,9 @@ A seam is the limit of weakened coupling between neighbouring columns rather tha
 \end{equation}
 in the seam frame $(\vect{n},\vect{t})$, with coefficients that fall as the integrity $s$ of the adjacent columns falls. Intact material has coefficients so large that the jump vanishes, and the face is simply interior: its markers are not split, and the sheet is continuous there. Once damage has lowered the coupling far enough, the face is represented as a seam. Three seam types are used; the transform is the default, and the other two add sources or sinks of lithosphere.
 
-\paragraph{Ridge.} The two faces are uncoupled. Each is a free edge facing a zero-age ridge column, so~\eqref{eq:freeedge} applies with $\Phi_f=\Phi_r$. New lithosphere enters each face with state $(h_{oc},\rho_{oc},\Theta=0,s=1)$ at the rate at which the plate moves away from the seam. The spreading rate is not imposed; it results from the force balance.
+Each seam type says which normal motion has somewhere to go. A ridge fills opening with new lithosphere; a trench consumes convergence by subduction; a transform does neither. Normal motion that the seam can absorb is free of $C_n$; normal motion it cannot absorb is resisted with the stiff $C_n$ of a transform. The normal coupling is therefore one-sided, a contact condition: a ridge cannot close and a trench cannot open, however the forces act. Sustained tension across a trench, or compression across a ridge, is instead recorded by the force balance and is what the life cycle (Section~\ref{sec:lifecycle}) acts on.
+
+\paragraph{Ridge.} While the faces separate they are uncoupled, and each is a free edge facing a zero-age ridge column, so~\eqref{eq:freeedge} applies with $\Phi_f=\Phi_r$. New lithosphere enters each face with state $(h_{oc},\rho_{oc},\Theta=0,s=1)$ at the rate at which the plate moves away from the seam. The spreading rate is not imposed; it results from the force balance.
 
 \paragraph{Transform.} The faces may slide past each other but barely separate: the traction~\eqref{eq:interface} applies with $C_n$ a large penalty and $C_t$ small. Material may be exchanged between the two faces if they converge or separate slightly.
 
@@ -207,7 +209,7 @@ in the seam frame $(\vect{n},\vect{t})$, with coefficients that fall as the inte
 \begin{equation}
   v_s = (\vect{u}_{\mathrm{sub}}-\vect{u}_{\mathrm{ovr}})\cdot\vect{n},
 \end{equation}
-where $\vect{n}$ points from the subducting into the overriding plate. The faces are coupled by~\eqref{eq:interface} with tangential coupling $C_t$ (a megathrust friction proxy) and small normal coupling $C_n$, because convergence is taken up by subduction rather than by the faces pressing together. An optional trench-suction traction $-P_{ts}\vect{n}$ acts on the overriding face.
+where $\vect{n}$ points from the subducting into the overriding plate. The faces are coupled by~\eqref{eq:interface} with tangential coupling $C_t$ (a megathrust friction proxy) and small normal coupling $C_n$ while the faces converge, because convergence is taken up by subduction rather than by the faces pressing together; opening is resisted by the stiff $C_n$. An optional trench-suction traction $-P_{ts}\vect{n}$ acts on the overriding face.
 
 \subsection{Slab reservoir}
 \label{sec:slabmodel}
@@ -359,7 +361,7 @@ Triangle quantities ($h_c$, $\Theta_c$, $s_c$, $\tilde\Phi_c$) are averages of t
 \end{align}
 The free-edge condition~\eqref{eq:freeedge} with $\Phi_f=\Phi_r$ is the natural boundary condition of this form; it holds on ridge faces with no additional code. A free face whose facing column differs from the ridge column receives the extra traction $(\Phi_r-\Phi_f)\vect{n}$.
 
-\paragraph{Seam terms.} Seam contributions are lumped onto copy pairs. A seam marker with copies $(k^-,k^+)$ has length share $\ell_k$ (half the lengths of its adjacent seam edges), a frame $(\vect{n}_k,\vect{t}_k)$ with $\vect{n}_k$ from side $-$ to side $+$, and coupling tensor $\mathsf{C}_k=C_n\vect{n}_k\vect{n}_k^{\mathsf T}+C_t\vect{t}_k\vect{t}_k^{\mathsf T}$. Coupling adds
+\paragraph{Seam terms.} Seam contributions are lumped onto copy pairs. A seam marker with copies $(k^-,k^+)$ has length share $\ell_k$ (half the lengths of its adjacent seam edges), a frame $(\vect{n}_k,\vect{t}_k)$ with $\vect{n}_k$ from side $-$ to side $+$, and coupling tensor $\mathsf{C}_k=C_n\vect{n}_k\vect{n}_k^{\mathsf T}+C_t\vect{t}_k\vect{t}_k^{\mathsf T}$, where $C_n$ is the free or the stiff value according to the pair's contact state (closing or opening, from the current velocity). Coupling adds
 \begin{equation}
   \begin{pmatrix}\mathsf{K}_{k^-k^-}&\mathsf{K}_{k^-k^+}\\\mathsf{K}_{k^+k^-}&\mathsf{K}_{k^+k^+}\end{pmatrix}
   \mathrel{+}= \ell_k\begin{pmatrix}\mathsf{C}_k&-\mathsf{C}_k\\-\mathsf{C}_k&\mathsf{C}_k\end{pmatrix},
@@ -376,7 +378,7 @@ which is symmetric positive semi-definite. At a trench, with $k^s$ the subductin
   \big(\mathsf{K}(\vect{u})+\mathsf{M}_\beta\big)\,\vect{u}=\vect{F},
   \label{eq:system}
 \end{equation}
-with Dirichlet rows eliminated symmetrically, is symmetric positive definite whenever rigid-body modes are removed. Because $\Hint_c$ depends on $\vect{u}$ for $n\ne1$, it is solved by Picard iteration, warm-started from the previous step. In the drag-dominated limit it reduces to $\vect{u}\approx-\nabla\Phi/\beta$.
+with Dirichlet rows eliminated symmetrically, is symmetric positive definite whenever rigid-body modes are removed. Because $\Hint_c$ depends on $\vect{u}$ for $n\ne1$, and the contact state of each seam pair depends on the sign of its normal velocity jump, it is solved by Picard iteration, warm-started from the previous step; contact states are updated from each iterate, as in an active-set method. In the drag-dominated limit it reduces to $\vect{u}\approx-\nabla\Phi/\beta$.
 
 \subsection{Mesh velocity}
 Markers move with a velocity $\vect{w}$ that is a free choice. Interior markers use the material velocity plus monitor-weighted smoothing,
@@ -529,11 +531,15 @@ New cells tile the cavity exactly and each old reconstruction integrates to its 
 \begin{algorithmic}[1]
 \Require initial guess $\vect{u}^{(0)}$; tolerance $\delta$; relaxation $\omega\in(0,1]$
 \State assemble $\vect{F}$ (buoyancy, free-face, slab, suction terms) and $\mathsf{M}_\beta$ from $\beta(h_i,\Theta_i)$
-\State assemble the constant seam terms (coupling $\mathsf{C}_k$, slab drag $\xi$)
+\State assemble the constant seam terms (tangential coupling, slab drag $\xi$)
 \For{$k=0,1,2,\dots$}
   \For{each triangle $c$}
     \State $\boldsymbol\epsilon_c\gets\mathsf{B}_c\vect{u}_c^{(k)}$; $\Hint_c\gets\tfrac12\Bint_c\max(\edot_{E,c},\edot_{\min})^{1/n-1}$
     \State write $2A_c\Hint_c\mathsf{B}_c^{\mathsf T}\mathsf{D}\mathsf{B}_c$ into its matrix slots
+  \EndFor
+  \For{each seam copy pair $k$}
+    \State contact if the normal jump in $\vect{u}^{(k)}$ is one the seam cannot absorb (always, for a transform)
+    \State add $\ell_k\mathsf{C}_k$ with stiff or free $C_n$; a pair in contact faces the other side's column, an open ridge pair the ridge column
   \EndFor
   \State solve $(\mathsf{K}+\mathsf{M}_\beta)\vect{u}^\ast=\vect{F}$ with Dirichlet rows eliminated
   \State $\vect{u}^{(k+1)}\gets(1-\omega)\vect{u}^{(k)}+\omega\vect{u}^\ast$
