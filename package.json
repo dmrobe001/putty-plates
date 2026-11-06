@@ -1,0 +1,12 @@
+{
+  "name": "putty-plates",
+  "private": true,
+  "description": "Plate tectonics toy for generating Earth-adjacent worlds; the app is the single file index.html.",
+  "scripts": {
+    "check": "node tests/sim-checks.js"
+  },
+  "devDependencies": {
+    "delaunator": "5.0.1",
+    "playwright": "^1.48.0"
+  }
+}
