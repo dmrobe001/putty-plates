@@ -4,13 +4,14 @@ A plate-tectonics simulator for generating Earth-adjacent worlds for a game. The
 
 The numerical method is described in `docs/crust_ale_method.tex`: a conservative vertex-centred arbitrary Lagrangian–Eulerian (ALE) scheme for a thin viscous lithospheric sheet. `PLAN.md` maps it onto slices and records what each slice has measured.
 
-The whole app is one file, `index.html`. It loads one script from a content delivery network (CDN), [Delaunator](https://github.com/mapbox/delaunator), and needs a browser with WebGL2. It is written as a page fragment (no `<!doctype>`), because it is published as a claude.ai Artifact. Opened directly from disk it renders in quirks mode, which this layout tolerates.
+The whole app is one file, `index.html`. Its simulation script also runs as a background worker (built from the page's own script text), so a slow step never freezes drawing or input. If the browser refuses the worker, it runs in the page, one step at a time. It loads one script from a content delivery network (CDN), [Delaunator](https://github.com/mapbox/delaunator), and needs a browser with WebGL2. It is written as a page fragment (no `<!doctype>`), because it is published as a claude.ai Artifact. Opened directly from disk it renders in quirks mode, which this layout tolerates.
 
 ## Controls
 
 | Control | Effect |
 | --- | --- |
-| Time step | Million years (Myr) simulated per animation frame; takes effect immediately |
+| Time per update | Million years (Myr) the page asks the simulation for at a time; takes effect immediately. The hint shows the rate actually achieved |
+| Seed | The world's random seed; type one and press Enter to rebuild that world |
 | Vertices | Mesh resolution; regenerates the world when you release the slider |
 | Continental area fraction | Initial share of the surface that is continental crust; regenerates |
 | Plates | Initial plate count; regenerates |
@@ -24,6 +25,8 @@ The whole app is one file, `index.html`. It loads one script from a content deli
 | View | Elevation, plates and seams, thermal age, crustal thickness, speed, effective strain rate, or integrity (damage) |
 | Show triangulation | Draws the current triangles and seams |
 | Show velocity | One segment per marker copy: where it would be after 5 Myr at the current velocity |
+| Extremes | The highest point and the thickest crust, with what is there (copies, seams, cell size against a typical cell, the neighbours' thickness); **Turn to it** rotates the globe to face it |
+| Banner (top of the screen) | Why the simulation stopped, any error it hit, or how long it has been computing the next update |
 | Run / Pause (Space) | Pause or resume time |
 | Reset (R) | Restart from t = 0 with the same seed |
 | New seed (N) | A different random world |

@@ -113,7 +113,16 @@ kbd { font-family: var(--font-data); font-size: 0.72rem; border: 1px solid var(-
 }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
 .sub { font-size: var(--step--1); color: var(--muted); letter-spacing: 0.02em; }
-.status { margin: 0; padding: 8px 10px; border: 1px solid var(--ochre); border-radius: 4px; color: var(--ink); font-size: var(--step--1); line-height: 1.35; }
+#banner {
+  position: fixed; top: calc(12px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%);
+  max-width: min(560px, calc(100% - 340px)); box-sizing: border-box;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px;
+  font-size: var(--step--1); line-height: 1.35; color: var(--ink);
+}
+#banner[data-kind="stop"] { border-color: var(--ochre); }
+#seedIn { width: 9em; font: inherit; font-family: var(--font-data); font-size: var(--step--1); color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 4px; padding: 2px 6px; text-align: right; }
+.ctl button { align-self: flex-start; padding: 3px 8px; font-size: var(--step--1); }
+@media (max-width: 640px) { #banner { max-width: calc(100% - 16px); top: calc(84px + env(safe-area-inset-top, 0px)); } }
 .check { display: flex; gap: 6px; align-items: center; font-size: var(--step--1); color: var(--muted); cursor: pointer; }
 .check input { accent-color: var(--ochre); margin: 0; }
 .stats dt { white-space: nowrap; }
@@ -125,7 +134,7 @@ kbd { font-family: var(--font-data); font-size: 0.72rem; border: 1px solid var(-
   <div class="head">
     <div>
       <h1>Putty Plates</h1>
-      <div class="sub">Slice 6 · seams that start, change, heal and zip</div>
+      <div class="sub">Seams that start, change, heal and zip</div>
     </div>
     <span class="clock" id="clock">0 <small>Myr</small></span>
     <button id="toggle" aria-expanded="true">Hide</button>
@@ -136,11 +145,10 @@ kbd { font-family: var(--font-data); font-size: 0.72rem; border: 1px solid var(-
     <button class="grow" id="reset" title="Restart from t = 0 with this seed (R)">Reset</button>
     <button class="grow" id="reseed" title="New random world (N)">New seed</button>
   </div>
-  <p class="status" id="status" hidden></p>
 
   <div class="group">
     <div class="ctl">
-      <div class="top"><label class="name" for="dt">Time step</label><span class="val" id="dtVal"></span></div>
+      <div class="top"><label class="name" for="dt">Time per update</label><span class="val" id="dtVal"></span></div>
       <input type="range" id="dt" min="0" max="100" step="0.5" value="50">
       <span class="hint" id="dtHint"></span>
     </div>
@@ -148,6 +156,10 @@ kbd { font-family: var(--font-data); font-size: 0.72rem; border: 1px solid var(-
 
   <div class="group">
     <div class="label"><span>Initial conditions</span><span>apply on release</span></div>
+    <div class="ctl">
+      <div class="top"><label class="name" for="seedIn">Seed</label><input type="number" id="seedIn" inputmode="numeric" step="1"></div>
+      <span class="hint">Type a number and press Enter; New seed draws one at random</span>
+    </div>
     <div class="ctl">
       <div class="top"><label class="name" for="nv">Vertices</label><span class="val" id="nvVal"></span></div>
       <input type="range" id="nv" min="0" max="100" step="0.5" value="45">
@@ -231,16 +243,30 @@ kbd { font-family: var(--font-data); font-size: 0.72rem; border: 1px solid var(-
     <dt>Crust created · subducted</dt><dd id="sFlux">–</dd>
     <dt>Budget error V · M · Z</dt><dd id="sBudget">–</dd>
     <dt>Splits · collapses · flips</dt><dd id="sOps">–</dd>
-    <dt>Sub-steps · cost per frame</dt><dd id="sCost">–</dd>
+    <dt>Last update took</dt><dd id="sCost">–</dd>
   </dl>
+  <div class="group">
+    <div class="label"><span>Extremes</span><span>to find spikes</span></div>
+    <div class="ctl">
+      <div class="top"><span class="name">Highest point</span><span class="val" id="sHigh">–</span></div>
+      <span class="hint" id="sHighWhere"></span>
+      <button id="showHigh">Turn to it</button>
+    </div>
+    <div class="ctl">
+      <div class="top"><span class="name">Thickest crust</span><span class="val" id="sThick">–</span></div>
+      <span class="hint" id="sThickWhere"></span>
+      <button id="showThick">Turn to it</button>
+    </div>
+  </div>
 
   <p class="helptext keyhelp" style="margin:0">Drag to orbit, scroll or pinch to zoom. <kbd>Space</kbd> pause, <kbd>R</kbd> reset, <kbd>N</kbd> new seed.</p>
 </aside>
 
 <div id="legend" aria-live="polite"></div>
+<div id="banner" role="status" aria-live="polite" hidden></div>
 
 <script src="https://cdn.jsdelivr.net/npm/delaunator@5.0.1/delaunator.min.js"></script>
-<script>
+<script id="sim">
 "use strict";
 /* =====================================================================
    Putty Plates, slice 2: the conservative vertex-centred ALE data model
@@ -343,7 +369,7 @@ function triArea(X, a, b, c) {
    marker index: 1 = the triangle containing that directed edge, 2 = the other. Plates are derived: the
    regions that seams separate (a seam may also end inside a plate). */
 const isSeam = (w, a, b) => w.seamInfo.has(KEY(a, b));
-let W = null;
+let W = null, TOPO_SEQ = 0;
 
 // Topology derived from T alone: corner incidence, 1-ring neighbours, twin corners.
 function deriveTopology(w) {
@@ -387,7 +413,7 @@ function deriveCopies(w) {
   for (let e = 0; e < sA.length; e++) { sList[sFill[sA[e]]++] = e; sList[sFill[sB[e]]++] = e; }
   Object.assign(w, { cOff, sA: Int32Array.from(sA), sB: Int32Array.from(sB), sC: Int32Array.from(sC), sT: Int8Array.from(sT), sSub: Int8Array.from(sSub), sCount, sNb, sEdge, ovr, sOff, sList });
   computeAreas(w);
-  w.topoVersion = (w.topoVersion || 0) + 1;
+  w.topoVersion = ++TOPO_SEQ; // unique across worlds, so a renderer never mistakes a new world's mesh for the old one's
 }
 function computeAreas(w) {
   const A = new Float64Array(w.CM.length), T = w.T, TC = w.TC, X = w.X;
@@ -1222,7 +1248,9 @@ function grow(nm, off, nbr, seeds, rates, label, rng, limit) {
 
 function makeWorld(params) {
   const rng = mulberry32(params.seed);
-  const mesh = buildMesh(params.N, rng);
+  // a mesh built elsewhere from the same seed (the page builds it for a worker, which has no Delaunator): skip
+  // the 3 random numbers per marker that buildMesh draws, so the rest of the world is the same
+  let mesh = params.mesh; if (mesh) { for (let i = 0; i < 3 * params.N; i++) rng(); } else mesh = buildMesh(params.N, rng);
   const w = { params, rng, t: 0, X: mesh.P, T: mesh.T, seamInfo: new Map(), ops: { split: 0, collapse: 0, seam: 0, flip: 0, zip: 0, snap: 0, seamSplit: 0 }, exhausted: null, kappaM: params.kappaM, meshMode: params.meshMode };
   const nt = w.T.length / 3, X = w.X;
   // Plates: additively weighted Voronoi regions of triangle centroids (connected, curved boundaries).
@@ -1688,6 +1716,39 @@ function advance(w, dtFrame) {
   return n;
 }
 
+
+// ---------- what the page needs from a world (the simulation may run in a worker) ----------
+// Summary numbers for the stats panel, and the highest and thickest columns with what is around them,
+// for finding spikes.
+function worldStats(w) {
+  const B = w.budget, sum = k => { let s = 0; for (const v of w[k]) s += v; return s; }, X = w.X;
+  const L = [0, 0, 0];
+  for (let e = 0; e < w.sA.length; e++) { const a = w.sA[e], b = w.sB[e]; L[w.sT[e]] += Math.hypot(X[3*a] - X[3*b], X[3*a+1] - X[3*b+1], X[3*a+2] - X[3*b+2]) * R_KM; }
+  const sp = []; for (let c = 0; c < w.CM.length; c++) sp.push(Math.hypot(w.U[3*c], w.U[3*c+1], w.U[3*c+2]) * R_KM / 10); sp.sort((a, b) => a - b);
+  const tl = trenchLengths(w); let ws = 0, wl = 0, wmax = 0; for (let c = 0; c < w.CM.length; c++) if (tl[c] > 0) { ws += w.Wl[c]; wl += tl[c]; wmax = Math.max(wmax, w.Wl[c] / tl[c]); }
+  const col = c => { const A = w.A[c], h = w.V[c] / A, rho = w.V[c] > 0 ? w.M[c] / w.V[c] : PHYS.rho_oc, th = w.Z[c] / A; return { h, rho, th, e: elevation(h, rho, th) }; };
+  let ce = 0, ch = 0, be = -Infinity, bh = -Infinity;
+  for (let c = 0; c < w.CM.length; c++) { const q = col(c); if (q.e > be) { be = q.e; ce = c; } if (q.h > bh) { bh = q.h; ch = c; } }
+  const where = c => { const m = w.CM[c], q = col(c), types = []; for (let p = w.sOff[m]; p < w.sOff[m + 1]; p++) types.push(['ridge', 'transform', 'trench'][w.sT[w.sList[p]]]);
+    let rel = 0, n = 0; for (let p = w.incOff[m]; p < w.incOff[m + 1]; p++) { const v = w.nb[p]; for (let d = w.cOff[v]; d < w.cOff[v + 1]; d++) { rel += col(d).h; n++; } }
+    return { x: [X[3*m], X[3*m+1], X[3*m+2]], lat: Math.asin(X[3*m+2]) * 180 / Math.PI, lon: Math.atan2(X[3*m+1], X[3*m]) * 180 / Math.PI, e: q.e, h: q.h, neighbourH: n ? rel / n : 0,
+      areaOverTypical: w.A[c] / (4 * Math.PI / (X.length / 3)), copies: w.cOff[m + 1] - w.cOff[m], seams: types, plate: w.CP[c] }; };
+  return { t: w.t, nm: X.length / 3, nc: w.CM.length, nt: w.TP.length, seamKm: L, speedMed: sp[sp.length >> 1], speedMax: sp[sp.length - 1],
+    slab: wl > 0 ? [ws / wl, wmax] : null, events: { ...w.events }, solve: w.solve ? { ...w.solve } : null, created: B.Vc, subducted: B.Vs,
+    budget: [(sum('V') - (B.V0 + B.Vc - B.Vs)) / B.V0, (sum('M') - (B.M0 + B.Mc - B.Ms)) / B.M0, (sum('Z') - (B.Z0 + B.Zsrc - B.Zs)) / B.Z0],
+    ops: [w.ops.split + w.ops.seamSplit, w.ops.collapse + w.ops.seam + w.ops.zip, w.ops.flip + w.ops.snap], highest: where(ce), thickest: where(ch) };
+}
+// Copies of everything the renderer reads, as transferable typed arrays.
+function snapshot(w, strain) {
+  const f = a => Float64Array.from(a), i = a => Int32Array.from(a);
+  return { t: w.t, X: f(w.X), T: i(w.T), TC: i(w.TC), CM: i(w.CM), CP: i(w.CP), A: f(w.A), V: f(w.V), M: f(w.M), Z: f(w.Z), S: f(w.S), U: f(w.U),
+    sA: i(w.sA), sB: i(w.sB), sC: i(w.sC), sT: Int8Array.from(w.sT), topoVersion: w.topoVersion, exhausted: w.exhausted,
+    ec: strain ? copyStrainRates(w, w.U) : null, stats: worldStats(w) };
+}
+const snapshotBuffers = s => [s.X, s.T, s.TC, s.CM, s.CP, s.A, s.V, s.M, s.Z, s.S, s.U, s.sA, s.sB, s.sC, s.sT, ...(s.ec ? [s.ec] : [])].map(a => a.buffer);
+</script>
+<script>
+"use strict";
 // ---------- colour maps ----------
 function ramp(stops) {
   return x => {
@@ -1765,7 +1826,7 @@ function updateBuffers(w) {
   const nc = w.CM.length, X = w.X, ex = view.exaggeration / R_KM, mode = view.mode;
   const pos = new Float32Array(3 * nc), nrm = new Float32Array(3 * nc), col = new Float32Array(3 * nc), elev = new Float32Array(nc);
   let land = 0, area = 0, ec = null;
-  if (mode === 'strain') ec = copyStrainRates(w, w.U);
+  if (mode === 'strain') ec = w.ec || new Float64Array(nc);
   for (let c = 0; c < nc; c++) {
     const A = w.A[c], h = w.V[c] / A, rho = w.V[c] > 0 ? w.M[c] / w.V[c] : PHYS.rho_oc, th = w.Z[c] / A, e = elevation(h, rho, th);
     elev[c] = e; area += A; if (e > 0) land += A;
@@ -1835,7 +1896,12 @@ function mats() {
   const [x, y, z, w] = view.q;
   const Rm = [1 - 2*(y*y + z*z), 2*(x*y + z*w), 2*(x*z - y*w), 0,  2*(x*y - z*w), 1 - 2*(x*x + z*z), 2*(y*z + x*w), 0,  2*(x*z + y*w), 2*(y*z - x*w), 1 - 2*(x*x + y*y), 0,  0, 0, -view.dist, 1];
   const asp = canvas.width / canvas.height, f = 1 / Math.tan(0.5 * 32 * Math.PI / 180), n = 0.02, fa = 50;
-  return { Rm, Pm: [f / asp, 0, 0, 0, 0, f, 0, 0, 0, 0, (fa + n) / (n - fa), -1, 0, 0, 2 * fa * n / (n - fa), 0] };
+  // When the controls cover the bottom of the screen (phones), centre and fit the globe in the part above them:
+  // ndc_y' = k ndc_y + s, with s the covered fraction of the height and k = 1 − s.
+  let s = 0; const P = document.getElementById('panel');
+  if (window.matchMedia('(max-width: 640px)').matches && !P.classList.contains('collapsed')) s = Math.min(0.6, (canvas.clientHeight - P.getBoundingClientRect().top) / canvas.clientHeight);
+  const k = 1 - s;
+  return { Rm, Pm: [k * f / asp, 0, 0, 0, 0, k * f, 0, 0, 0, -s, (fa + n) / (n - fa), -1, 0, 0, 2 * fa * n / (n - fa), 0] };
 }
 const pointers = new Map(); let pinch0 = 0;
 canvas.addEventListener('pointerdown', e => { canvas.setPointerCapture(e.pointerId); pointers.set(e.pointerId, [e.clientX, e.clientY]); if (pointers.size === 2) { const [a, b] = [...pointers.values()]; pinch0 = Math.hypot(a[0] - b[0], a[1] - b[1]); } });
@@ -1861,12 +1927,12 @@ const ui = {
   cf: () => +$('cf').value, np: () => +$('np').value, km: () => +$('km').value,
   st: () => Math.pow(10, +$('st').value), ck: () => +$('ck').value, ta: () => +$('ta').value, ne: () => +$('ne').value
 };
-let running = true, seed = (Math.random() * 2 ** 31) | 0, fps = 60, costMs = 0, subSteps = 0, meshMode = 'lagrangian';
+let running = true, seed = (Math.random() * 2 ** 31) | 0, fps = 60, meshMode = 'lagrangian';
 const fmtN = n => n.toLocaleString('en-US');
 function refreshLabels() {
   const dt = ui.dt();
-  $('dtVal').textContent = `${dt < 1 ? dt.toFixed(2) : dt.toFixed(1)} Myr / frame`;
-  $('dtHint').textContent = `≈ ${fmtN(Math.round(dt * fps))} Myr per second at ${Math.round(fps)} fps; sub-stepped for stability`;
+  $('dtVal').textContent = `${dt < 1 ? dt.toFixed(2) : dt.toFixed(1)} Myr`;
+  $('dtHint').textContent = `asked of the simulation per update, sub-stepped for stability; lately ${sim.rate ? sim.rate.toFixed(sim.rate < 10 ? 1 : 0) : '–'} Myr per second`;
   const N = ui.N();
   $('nvVal').textContent = fmtN(N);
   $('nvHint').textContent = `marker spacing ≈ ${Math.round(Math.sqrt(4 * Math.PI / N) * R_KM * 1.07)} km`;
@@ -1882,36 +1948,117 @@ function refreshLabels() {
   $('taVal').textContent = `${ui.ta().toFixed(1)} Myr`;
   $('taHint').textContent = `steady pull ≈ ${(ui.ta() * SEC_MYR * G * PHYS.rho_m * PHYS.alpha * PHYS.Theta_ss * 1000 * 0.01 / 3.15576e7 / 1e12).toFixed(1)} TN/m per cm/yr of 80 Myr ocean subducting; slab drag ξ ≈ ${(RHEO.xi * 0.01 / 3.15576e7 / 1e12).toFixed(1)} TN/m per cm/yr`;
 }
+// ---------- the simulation driver ----------
+// The simulation runs in a worker when the browser allows one, so a slow step never freezes drawing or input:
+// the page asks for the next frame's worth of time only once the last one has arrived, and shows how long it
+// has been waiting. Without a worker it runs here, one step per task, so the page still gets a turn between
+// steps. The worker's code is the page's own simulation script.
+function workerMain() {
+  let w = null, gen = -1;
+  const send = (strain) => { const s = snapshot(w, strain); postMessage({ type: 'snap', gen, snap: s }, snapshotBuffers(s)); };
+  onmessage = e => { const m = e.data;
+    try {
+      if (m.type === 'init') { Object.assign(RHEO, m.rheo); gen = m.gen; w = makeWorld(m.params); send(m.strain); }
+      else if (m.type === 'set') { Object.assign(RHEO, m.rheo); if (w) { w.kappaM = m.kappaM; w.meshMode = m.meshMode; } }
+      else if (m.type === 'advance' && w && m.gen === gen) { if (!w.exhausted) advance(w, m.dt); send(m.strain); }
+    } catch (err) { postMessage({ type: 'error', gen, message: String(err && err.stack || err) }); }
+  };
+  postMessage({ type: 'ready' });
+}
+const rheoUI = () => ({ n: RHEO.n, tau_a: RHEO.tau_a, strength: RHEO.strength, ck: RHEO.ck });
+const sim = {
+  worker: null, mode: 'starting', gen: 0, pending: false, sentAt: 0, last: null, error: null, local: null, params: null,
+  start() {
+    try {
+      const src = document.getElementById('sim').textContent + '\n;(' + workerMain.toString() + ')();';
+      this.worker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+      this.worker.onmessage = e => this.receive(e.data);
+      this.worker.onerror = e => { e.preventDefault(); this.fallback('the worker failed to start (' + (e.message || 'blocked') + ')'); };
+      setTimeout(() => { if (this.mode === 'starting') this.fallback('the worker did not answer'); }, 3000);
+    } catch (err) { this.fallback(String(err)); }
+  },
+  fallback(why) {
+    if (this.mode === 'local') return;
+    if (this.worker) this.worker.terminate(); this.worker = null; this.mode = 'local'; this.fallbackWhy = why;
+    if (this.params) this.init(this.params);
+  },
+  receive(m) {
+    if (m.type === 'ready') { if (this.mode === 'starting') { this.mode = 'worker'; if (this.params) this.init(this.params); } return; }
+    if (m.gen !== this.gen) return; // from a world that has since been replaced
+    this.pending = false;
+    if (m.type === 'error') { this.error = m.message; setRunning(false); return; }
+    const now = performance.now();
+    if (this.last && m.snap.t > this.last.t) { const r = (m.snap.t - this.last.t) / Math.max(1e-3, (now - this.lastAt) / 1000); this.rate = this.rate ? 0.8 * this.rate + 0.2 * r : r; }
+    this.last = m.snap; this.lastAt = now; this.lastTook = now - this.sentAt; dirty = true;
+  },
+  init(params) {
+    this.params = params; this.gen++; this.last = null; this.rate = 0; this.error = null; this.pending = true; this.sentAt = performance.now();
+    const strain = view.mode === 'strain';
+    if (this.mode === 'worker') {
+      const mesh = buildMesh(params.N, mulberry32(params.seed)); // Delaunator lives on this side
+      this.worker.postMessage({ type: 'init', gen: this.gen, params: { ...params, mesh }, rheo: rheoUI(), strain }, [mesh.P.buffer, mesh.T.buffer]);
+    } else if (this.mode === 'local') {
+      const g = this.gen;
+      setTimeout(() => { if (g !== this.gen) return;
+        try { this.local = W = makeWorld(params); this.receive({ type: 'snap', gen: g, snap: snapshot(W, strain) }); }
+        catch (err) { this.receive({ type: 'error', gen: g, message: String(err && err.stack || err) }); } }, 0);
+    }
+  },
+  set() { if (this.mode === 'worker') this.worker.postMessage({ type: 'set', rheo: rheoUI(), kappaM: ui.km(), meshMode });
+          else if (this.local) { this.local.kappaM = ui.km(); this.local.meshMode = meshMode; } },
+  request(dt) {
+    if (this.pending || !this.last || this.error) return;
+    this.pending = true; this.sentAt = performance.now(); const strain = view.mode === 'strain', g = this.gen;
+    if (this.mode === 'worker') { this.worker.postMessage({ type: 'advance', gen: g, dt, strain }); return; }
+    // in the page: one step per task
+    let left = dt, n = 0; const w = this.local;
+    const go = () => { if (g !== this.gen) return;
+      try { if (left > 1e-9 && !w.exhausted && n < 40) { const d = step(w, left); n++; left = d ? left - d : 0; if (d) { setTimeout(go, 0); return; } }
+            this.receive({ type: 'snap', gen: g, snap: snapshot(w, strain) }); }
+      catch (err) { this.receive({ type: 'error', gen: g, message: String(err && err.stack || err) }); } };
+    setTimeout(go, 0);
+  }
+};
+
 function regenerate() {
-  W = makeWorld({ seed, N: ui.N(), contFrac: ui.cf(), plates: ui.np(), kappaM: ui.km(), meshMode });
-  $('status').hidden = true;
+  if (sim.mode === 'starting' && !sim.worker) sim.start();
+  sim.init({ seed, N: ui.N(), contFrac: ui.cf(), plates: ui.np(), kappaM: ui.km(), meshMode });
+  $('seedIn').value = seed; dirty = true;
 }
 function setRunning(r) { running = r; $('run').textContent = r ? 'Pause' : 'Run'; }
 $('run').onclick = () => setRunning(!running);
 $('reset').onclick = () => regenerate();
 $('reseed').onclick = () => { seed = (Math.random() * 2 ** 31) | 0; regenerate(); };
+$('seedIn').addEventListener('change', () => { const v = parseInt($('seedIn').value, 10); if (Number.isFinite(v)) { seed = v | 0; regenerate(); } });
 for (const id of ['dt', 'nv', 'cf', 'np', 'km', 'st', 'ck', 'ta', 'ne']) $(id).addEventListener('input', refreshLabels);
-$('ne').addEventListener('input', () => { RHEO.n = ui.ne(); });
-$('ta').addEventListener('input', () => { RHEO.tau_a = ui.ta(); });
-$('st').addEventListener('input', () => { RHEO.strength = ui.st(); });
-$('ck').addEventListener('input', () => { RHEO.ck = ui.ck(); });
+$('ne').addEventListener('input', () => { RHEO.n = ui.ne(); sim.set(); });
+$('ta').addEventListener('input', () => { RHEO.tau_a = ui.ta(); sim.set(); });
+$('st').addEventListener('input', () => { RHEO.strength = ui.st(); sim.set(); });
+$('ck').addEventListener('input', () => { RHEO.ck = ui.ck(); sim.set(); });
 for (const id of ['nv', 'cf', 'np']) $(id).addEventListener('change', regenerate);
-$('km').addEventListener('input', () => { W.kappaM = ui.km(); });
-$('ex').addEventListener('input', () => { view.exaggeration = +$('ex').value; refreshLabels(); });
-$('wire').addEventListener('change', e => { view.wire = e.target.checked; });
-$('arrows').addEventListener('change', e => { view.arrows = e.target.checked; });
+$('km').addEventListener('input', () => sim.set());
+$('ex').addEventListener('input', () => { view.exaggeration = +$('ex').value; refreshLabels(); dirty = true; });
+$('wire').addEventListener('change', e => { view.wire = e.target.checked; dirty = true; });
+$('arrows').addEventListener('change', e => { view.arrows = e.target.checked; dirty = true; });
 document.querySelectorAll('#viewMode button').forEach(b => b.onclick = () => {
-  view.mode = b.dataset.mode;
+  view.mode = b.dataset.mode; dirty = true;
   document.querySelectorAll('#viewMode button').forEach(x => x.setAttribute('aria-pressed', x === b ? 'true' : 'false'));
+  if (view.mode === 'strain' && !running) sim.request(0); // strain rates come with a snapshot
   drawLegend();
 });
 document.querySelectorAll('#meshMode button').forEach(b => b.onclick = () => {
-  meshMode = b.dataset.mesh; W.meshMode = meshMode;
+  meshMode = b.dataset.mesh; sim.set();
   document.querySelectorAll('#meshMode button').forEach(x => x.setAttribute('aria-pressed', x === b ? 'true' : 'false'));
 });
 $('toggle').onclick = () => { const c = $('panel').classList.toggle('collapsed'); $('toggle').textContent = c ? 'Controls' : 'Hide'; $('toggle').setAttribute('aria-expanded', String(!c)); };
+// Turn the globe so that a point faces the viewer: the quaternion taking its direction to +z (eye space).
+function lookAt(p) { const cx = p[1], cy = -p[0], cz = 0, d = p[2]; if (d < -0.9999) { view.q = [1, 0, 0, 0]; return; }
+  const q = [cx, cy, cz, 1 + d], l = Math.hypot(...q); view.q = q.map(v => v / l); }
+$('showHigh').onclick = () => { if (sim.last) lookAt(sim.last.stats.highest.x); };
+$('showThick').onclick = () => { if (sim.last) lookAt(sim.last.stats.thickest.x); };
 window.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' && e.key !== ' ') return;
+  if (e.target.tagName === 'INPUT' && e.target.type === 'number') return;
   if (e.key === ' ') { e.preventDefault(); setRunning(!running); }
   else if (e.key === 'r' || e.key === 'R') regenerate();
   else if (e.key === 'n' || e.key === 'N') $('reseed').click();
@@ -1935,49 +2082,58 @@ function drawLegend() {
 }
 
 function refreshStats(land) {
-  const w = W, B = w.budget, sum = k => w[k].reduce((s, v) => s + v, 0);
-  $('clock').innerHTML = `${(w.t < 100 ? w.t.toFixed(1) : fmtN(Math.round(w.t)))} <small>Myr</small>`;
-  $('sMesh').textContent = `${fmtN(w.X.length / 3)} · ${fmtN(w.CM.length)} · ${fmtN(w.TP.length)}`;
-  const L = [0, 0, 0];
-  for (let e = 0; e < w.sA.length; e++) { const a = w.sA[e], b = w.sB[e]; L[w.sT[e]] += Math.hypot(w.X[3*a] - w.X[3*b], w.X[3*a+1] - w.X[3*b+1], w.X[3*a+2] - w.X[3*b+2]) * R_KM; }
-  $('sSeam').textContent = L.map(v => `${fmtN(Math.round(v / 1000))}k`).join(' · ') + ' km';
+  const S = sim.last.stats, km3 = R_KM * R_KM / 1e6; // V in km·sr → 10⁶ km³
+  $('clock').innerHTML = `${(S.t < 100 ? S.t.toFixed(1) : fmtN(Math.round(S.t)))} <small>Myr</small>`;
+  $('sMesh').textContent = `${fmtN(S.nm)} · ${fmtN(S.nc)} · ${fmtN(S.nt)}`;
+  $('sSeam').textContent = S.seamKm.map(v => `${fmtN(Math.round(v / 1000))}k`).join(' · ') + ' km';
   $('sLand').textContent = `${(100 * land).toFixed(1)} %`;
-  const km3 = R_KM * R_KM / 1e6; // V in km·sr → 10⁶ km³
-  { const sp = []; for (let c = 0; c < w.CM.length; c++) sp.push(Math.hypot(w.U[3*c], w.U[3*c+1], w.U[3*c+2]) * R_KM / 10); sp.sort((a, b) => a - b);
-    $('sSpeed').textContent = `${sp[sp.length >> 1].toFixed(1)} · ${sp[sp.length - 1].toFixed(1)} cm/yr`; }
-  { const tl = trenchLengths(w); let s = 0, l = 0, mx = 0; for (let c = 0; c < w.CM.length; c++) if (tl[c] > 0) { s += w.Wl[c]; l += tl[c]; mx = Math.max(mx, w.Wl[c] / tl[c]); }
-    $('sSlab').textContent = l > 0 ? `${(s / l / 1e12).toFixed(1)} · ${(mx / 1e12).toFixed(1)} TN/m` : '–'; }
-  if (w.events) { const E = w.events; $('sEv1').textContent = `${E.nucleate} · ${E.heal}`; $('sEv2').textContent = `${E.subduct} · ${E.breakoff} · ${E.stall}`; $('sEv3').textContent = `${E.rift} · ${E.ridgeDeath}`; }
-  $('sSolve').textContent = w.solve ? `${w.solve.iters} in ${w.solve.passes} · ${w.solve.residual.toExponential(0)}` : '–';
-  $('sFlux').textContent = `${(B.Vc * km3).toFixed(1)} · ${(B.Vs * km3).toFixed(1)} M km³`;
-  const eV = (sum('V') - (B.V0 + B.Vc - B.Vs)) / B.V0, eM = (sum('M') - (B.M0 + B.Mc - B.Ms)) / B.M0, eZ = (sum('Z') - (B.Z0 + B.Zsrc - B.Zs)) / B.Z0;
-  $('sBudget').textContent = [eV, eM, eZ].map(v => v.toExponential(0)).join(' · ');
-  $('sOps').textContent = `${fmtN(w.ops.split + w.ops.seamSplit)} · ${fmtN(w.ops.collapse + w.ops.seam + w.ops.zip)} · ${fmtN(w.ops.flip + w.ops.snap)}`;
-  $('sCost').textContent = `${subSteps} · ${costMs.toFixed(0)} ms`;
-  if (w.exhausted && $('status').hidden) { $('status').textContent = w.exhausted; $('status').hidden = false; setRunning(false); }
+  $('sSpeed').textContent = `${S.speedMed.toFixed(1)} · ${S.speedMax.toFixed(1)} cm/yr`;
+  $('sSlab').textContent = S.slab ? `${(S.slab[0] / 1e12).toFixed(1)} · ${(S.slab[1] / 1e12).toFixed(1)} TN/m` : '–';
+  const E = S.events; $('sEv1').textContent = `${E.nucleate} · ${E.heal}`; $('sEv2').textContent = `${E.subduct} · ${E.breakoff} · ${E.stall}`; $('sEv3').textContent = `${E.rift} · ${E.ridgeDeath}`;
+  $('sSolve').textContent = S.solve ? `${S.solve.iters} in ${S.solve.passes} · ${S.solve.residual.toExponential(0)}` : '–';
+  $('sFlux').textContent = `${(S.created * km3).toFixed(1)} · ${(S.subducted * km3).toFixed(1)} M km³`;
+  $('sBudget').textContent = S.budget.map(v => v.toExponential(0)).join(' · ');
+  $('sOps').textContent = S.ops.map(fmtN).join(' · ');
+  $('sCost').textContent = `${(sim.lastTook / 1000).toFixed(1)} s · ${sim.mode === 'worker' ? 'background worker' : 'in page'}`;
+  const pt = q => `${q.lat.toFixed(0)}°, ${q.lon.toFixed(0)}°: copies ${q.copies}${q.seams.length ? ' on ' + q.seams.join('/') : ''}, cell ${q.areaOverTypical.toFixed(2)}× typical, neighbours' h ${q.neighbourH.toFixed(0)} km`;
+  $('sHigh').textContent = `${S.highest.e.toFixed(1)} km (h ${S.highest.h.toFixed(0)} km)`; $('sHighWhere').textContent = pt(S.highest);
+  $('sThick').textContent = `${S.thickest.h.toFixed(0)} km`; $('sThickWhere').textContent = pt(S.thickest);
+}
+// One line for whatever needs attention, floating over the globe so it is seen with the panel hidden.
+function refreshBanner() {
+  const B = $('banner'); let msg = '', kind = '';
+  if (sim.error) { msg = 'The simulation hit an error and paused: ' + sim.error.split('\n')[0]; kind = 'stop'; }
+  else if (sim.last && sim.last.exhausted) { msg = sim.last.exhausted + ' Reset (R) or try a new seed (N).'; kind = 'stop'; }
+  else if (sim.pending && !sim.last) msg = 'Building the world…';
+  else if (sim.pending && performance.now() - sim.sentAt > 1500) msg = `Still computing the next ${ui.dt() < 1 ? ui.dt().toFixed(2) : ui.dt().toFixed(1)} Myr: ${((performance.now() - sim.sentAt) / 1000).toFixed(0)} s so far. The planet can still be turned.`;
+  B.hidden = !msg; B.textContent = msg; B.dataset.kind = kind;
+  if (kind === 'stop' && running) setRunning(false);
 }
 
 // ---------- main loop ----------
-let last = performance.now(), statTick = 0;
+let last = performance.now(), statTick = 0, dirty = true, land = 0;
 function frame(now) {
   const el = now - last; last = now; if (el > 0 && el < 500) fps = 0.95 * fps + 0.05 * (1000 / el);
   resize();
-  if (running && !W.exhausted) { const t0 = performance.now(); subSteps = advance(W, ui.dt()); costMs = 0.9 * costMs + 0.1 * (performance.now() - t0); }
-  const land = updateBuffers(W);
+  if (running) sim.request(ui.dt());
+  const S = sim.last;
+  if (S && dirty) { land = updateBuffers(S); dirty = false; }
   gl.viewport(0, 0, canvas.width, canvas.height);
   gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-  gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK);
-  gl.useProgram(prog);
-  const { Rm, Pm } = mats();
-  gl.uniformMatrix4fv(loc.proj, false, Pm); gl.uniformMatrix4fv(loc.mv, false, Rm);
-  const lx = -0.45, ly = 0.55, lz = 0.70, ll = Math.hypot(lx, ly, lz); gl.uniform3f(loc.light, lx / ll, ly / ll, lz / ll);
-  gl.uniform1f(loc.flat, 0);
-  gl.bindVertexArray(R.tri.vao); gl.drawElements(gl.TRIANGLES, R.tri.count, gl.UNSIGNED_INT, 0);
-  gl.uniform1f(loc.flat, 1);
-  if (view.wire) { gl.bindVertexArray(R.wire.vao); gl.drawElements(gl.LINES, R.wire.count, gl.UNSIGNED_INT, 0); }
-  if (view.mode === 'plates' || view.wire) { gl.bindVertexArray(R.seam.vao); gl.drawElements(gl.LINES, R.seam.count, gl.UNSIGNED_INT, 0); }
-  if (view.arrows) { gl.bindVertexArray(R.arrow.vao); gl.drawElements(gl.LINES, R.arrow.count, gl.UNSIGNED_INT, 0); }
-  if (++statTick % 6 === 0) { refreshStats(land); refreshLabels(); }
+  if (S) {
+    gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE); gl.cullFace(gl.BACK);
+    gl.useProgram(prog);
+    const { Rm, Pm } = mats();
+    gl.uniformMatrix4fv(loc.proj, false, Pm); gl.uniformMatrix4fv(loc.mv, false, Rm);
+    const lx = -0.45, ly = 0.55, lz = 0.70, ll = Math.hypot(lx, ly, lz); gl.uniform3f(loc.light, lx / ll, ly / ll, lz / ll);
+    gl.uniform1f(loc.flat, 0);
+    gl.bindVertexArray(R.tri.vao); gl.drawElements(gl.TRIANGLES, R.tri.count, gl.UNSIGNED_INT, 0);
+    gl.uniform1f(loc.flat, 1);
+    if (view.wire) { gl.bindVertexArray(R.wire.vao); gl.drawElements(gl.LINES, R.wire.count, gl.UNSIGNED_INT, 0); }
+    if (view.mode === 'plates' || view.wire) { gl.bindVertexArray(R.seam.vao); gl.drawElements(gl.LINES, R.seam.count, gl.UNSIGNED_INT, 0); }
+    if (view.arrows) { gl.bindVertexArray(R.arrow.vao); gl.drawElements(gl.LINES, R.arrow.count, gl.UNSIGNED_INT, 0); }
+  }
+  if (++statTick % 6 === 0) { if (S) refreshStats(land); refreshLabels(); refreshBanner(); }
   requestAnimationFrame(frame);
 }
 
