@@ -214,19 +214,46 @@ Choices:
 - **The event scenarios used to stop on tangles, and the checks didn't say so.** Nucleation stopped at 14.1 Myr and subduction initiation at 2.6 Myr. Their slice-5 numbers were measured just before the runs died. Every scenario now reports `ran_to_Myr` and `stopped`. The runs no longer stop, so each now runs only as long as its rule needs: nucleation to 14 Myr, initiation to 3 Myr.
   - Results in those windows: nucleation 499 edges, all within 10° of the equator; initiation 61 of 61 trench edges subducting the old side.
 
-### Known defects found here (not fixed)
+### Found here (slice 7 below fixes the first)
 
-- **Transport at junctions.** Copies at and next to a junction drift away from a uniform state by about 1.5% per Myr. The old code shows the same drift to the third digit. Suspected cause: a junction's mesh velocity cannot equal every overriding plate's velocity, so a trench face that the flux treats as material actually sweeps area. Interior copies pick up 3.8% by the time the wedge is gone.
-- **Beyond the windows, conjecture until tested:**
+- **Transport at junctions.** Copies at and next to a junction drifted away from a uniform state by about 1.5% per Myr. The old code shows the same drift to the third digit.
+- **Beyond the windows:**
   - Under the nucleation push, the swath zips into fewer seams after 14 Myr (499 → 258 edges by 16 Myr). Then new seams nucleate outside the band: 494 edges, only 228 near the equator, by 18 Myr.
   - Under the unrelenting initiation push, interior damage spreads and nucleation runs away after 5 Myr.
-  - Both may be what "every damaged edge nucleates" does once runs survive (step 7). They may also be the junction drift feeding damage.
+
+## Slice 7 (step 6): seam-face fluxes consistent with how faces move (done)
+
+**Cause, measured.** The old flux declared some seam faces flux-free: a trench's overriding face, and a ridge face the plate moves toward. Faces move with the marker velocity w, and at a junction w cannot equal every overriding plate's velocity. Those faces therefore swept area without material.
+- In a uniform state, each drifting copy's content-versus-area mismatch over one step equalled the area its flux-free faces swept, to two digits (e.g. −1.06% against −1.05%).
+- Only 19 copies drifted, all at seams next to junctions.
+
+**Fix** (document, "Seam faces"; `fluxes`). Every face carries the flux of its own (u − w)·n. Facing segments first exchange: what one side sends fills the other's gap, upwind. The remainders sum to the physical convergence (u₁ − u₂)·n, independent of w. Only that remainder depends on the seam type:
+- trench: excess is subducted (only the subducting side feeds the slab);
+- ridge: an unfilled gap is new lithosphere;
+- elsewhere: thickening or thinning.
+
+Along ordinary seams this reduces to the old one-sided rules.
+
+### Measured (`npm run check`, about 16 s)
+
+- **Free stream, with seam and junction markers moved too** (new variant):
+
+  | | Old flux | New flux |
+  | --- | --- | --- |
+  | Worst cell | 153% | 1.0% |
+
+  The remaining errors are in sliver copies of 0.7–4.5% of a typical cell's area. They do not grow linearly with the imposed motion: 0.65% at a quarter of the amplitude, and exactly zero with no motion. One possibility is the known flat-versus-spherical geometry floor (0.1% in ordinary cells) divided by a tiny area. That doesn't explain the shape of the amplitude dependence, which I haven't explained.
+- **Free stream, interior motion only, no maintenance:** 7.2% → 0.10%. The old figure was mostly this defect too.
+- **Test 10 wedge, before it is gone:**
+  - interior copies 3.8% → 1.7%;
+  - copies anywhere 230% → 140%. What remains is real convergence that the prescribed rotations force across ridge edges at the polar junctions (both faces close). Ridges have no sink, and in the dynamic model the one-sided coupling would stiffen a closing ridge.
+- **Everything else is unchanged:** one-sided coupling, slab feedback, every event scenario, and budgets at about 4 × 10⁻¹⁵.
+- **The runaway nucleation under the unrelenting initiation push is not caused by the junction drift.** It is essentially unchanged: 695 nucleations by 8 Myr, against 739 before the fix.
 
 ## Next, in order
 
 Physics first (see "How we work" in the README). Each step comes with component checks on small hand-built worlds (`makeWorld` with `plateOf`, `seamOf`, `stateOf`; `w.bodyForce`).
 
-6. **Transport at junctions**: make every face's flux consistent with how it moves. A face declared material must either move with its copy or carry the flux of the area it sweeps. Check: the slice-6 wedge keeps junction copies uniform.
-7. **Narrow nucleation**: nucleation currently converts every damaged edge in a band into a seam. Nucleating only along the band's minimum of integrity would give single faults. Check: the nucleation scenario yields one connected chain.
+7. **Narrow nucleation**: nucleation currently converts every damaged edge in a band into a seam. Nucleating only along the band's minimum of integrity would give single faults. Check: the nucleation scenario yields one connected chain. Then look again at the runaway nucleation that unrelenting pushes produce once runs survive.
 
 Numerics, only when stability or looks need them: second-order transport (§2.3), the exact intersection remap (§2.9), a geometric conservation law exact on the sphere, WebGPU kernels and multigrid (§3).

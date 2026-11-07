@@ -294,15 +294,17 @@ require('./harness').inPage(() => {
 
   // Test 2 (free-stream preservation): uniform state, u = 0, smooth imposed motion of interior markers.
   res.freeStream = [];
-  for (const maintain of [false, true]) {
+  // With seams too, the imposed motion is applied to seam and junction markers as well: every seam face then
+  // moves through material that does not move, and must carry exactly the flux of the area it sweeps.
+  for (const [maintain, seams] of [[false, false], [true, false], [false, true]]) {
     const w = makeWorld({ seed: 5, N: 2000, contFrac: 0, plates: 4, kappaM: 0, meshMode: 'lagrangian' });
-    w.kinematic = true; w.omega = w.omega.map(() => [0, 0, 0]); w.noSources = true; w.noEvents = true; w.noMaintain = !maintain;
+    w.kinematic = true; w.omega = w.omega.map(() => [0, 0, 0]); w.noSources = true; w.noEvents = true; w.noMaintain = !maintain; w.extraWAll = seams; w.noDamage = true;
     for (let c = 0; c < w.CM.length; c++) { const A = w.A[c]; w.V[c] = 7 * A; w.M[c] = 7 * 2900 * A; w.Z[c] = 5e4 * A; w.S[c] = 7 * A; }
     const a = [0.3, -0.5, 0.8], b = [0.6, 0.2, -0.1], s = 0.05 * w.L0;
     w.extraW = (x, y, z) => { const f = Math.sin(3 * (b[0]*x + b[1]*y + b[2]*z)); return [s * f * (a[1]*z - a[2]*y), s * f * (a[2]*x - a[0]*z), s * f * (a[0]*y - a[1]*x)]; };
     let maxErr = 0;
     while (w.t < 4 - 1e-9) { advance(w, Math.min(0.5, 4 - w.t)); for (let c = 0; c < w.CM.length; c++) maxErr = Math.max(maxErr, Math.abs(w.V[c] / w.A[c] - 7) / 7); }
-    res.freeStream.push({ maintenance: maintain, max_relative_h_error: +maxErr.toExponential(2) });
+    res.freeStream.push({ maintenance: maintain, seam_markers_moved: seams, max_relative_h_error: +maxErr.toExponential(2) });
   }
   return res;
 });

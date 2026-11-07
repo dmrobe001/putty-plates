@@ -406,26 +406,24 @@ with relaxation $\kappa_m\in[0,1)$ and monitor $\mathcal{M}_i=1+a_h|\vect{G}^h_i
 \subsection{Flux update and geometric conservation}
 Over a step, markers move linearly, $\vect{x}^{n+1}=\vect{x}^n+\Delta t\,\vect{w}$, so every segment endpoint (a fixed linear combination of marker positions) moves linearly too. Fluxes are evaluated with segment geometry in the midpoint configuration $\vect{x}^{n+1/2}=\vect{x}^n+\tfrac12\Delta t\,\vect{w}$, and with $\vect{v}=\vect{u}-\vect{w}$ interpolated linearly to each segment midpoint.
 
-\paragraph{Internal segments and transform faces.} The volume passing from cell $p$ to cell $q$ is
+\paragraph{Internal segments.} The volume passing from cell $p$ to cell $q$ is
 \begin{equation}
   \Delta V_e=\Delta t\;h^\uparrow(\vect{x}_e)\;\vect{v}_e\cdot\vect{n}_e^{n+1/2}\,|e|^{n+1/2},
   \label{eq:flux}
 \end{equation}
-where $h^\uparrow$ is the reconstruction~\eqref{eq:recon} of the upwind cell evaluated at the segment midpoint $\vect{x}_e$. For an internal segment the midpoint has barycentric coordinates $(\tfrac5{12},\tfrac5{12},\tfrac16)$ in its triangle. A transform face pairs the two copies across the seam in the same way, so slight convergence or separation exchanges material between plates conservatively. The updates are $V_p\mathrel{-}=\Delta V_e$, $V_q\mathrel{+}=\Delta V_e$, with $M$ and $S$ carried as $\rho_c^\uparrow\Delta V_e$ and $s^\uparrow\Delta V_e$. Because $\Theta$ is per unit area rather than per unit crustal volume, $Z$ has its own flux, $\Delta Z_e=\Delta t\,\Theta^\uparrow(\vect{x}_e)\,\vect{v}_e\cdot\vect{n}_e^{n+1/2}|e|^{n+1/2}$.
+where $h^\uparrow$ is the reconstruction~\eqref{eq:recon} of the upwind cell evaluated at the segment midpoint $\vect{x}_e$. For an internal segment the midpoint has barycentric coordinates $(\tfrac5{12},\tfrac5{12},\tfrac16)$ in its triangle. The updates are $V_p\mathrel{-}=\Delta V_e$, $V_q\mathrel{+}=\Delta V_e$, with $M$ and $S$ carried as $\rho_c^\uparrow\Delta V_e$ and $s^\uparrow\Delta V_e$. Because $\Theta$ is per unit area rather than per unit crustal volume, $Z$ has its own flux, $\Delta Z_e=\Delta t\,\Theta^\uparrow(\vect{x}_e)\,\vect{v}_e\cdot\vect{n}_e^{n+1/2}|e|^{n+1/2}$.
 
-\paragraph{Ridge faces.} For a face segment of copy $k$ with outward normal $\vect{n}$ (pointing into the ridge), the plate moves away from the seam when $\vect{v}\cdot\vect{n}<0$, and new lithosphere enters:
+\paragraph{Seam faces.} Each face segment of copy $k$ has outward normal $\vect{n}_k$ and sweeps area at its own rate, so every face carries a flux. Its outflow area over the step is $o_k=\Delta t\,\vect{v}_k\cdot\vect{n}_k|e|$, with $\vect{v}=\vect{u}-\vect{w}$ evaluated a quarter of the way along the seam edge ($\tfrac34\vect{v}_k+\tfrac14\vect{v}_m$). Motion relative to the mesh is material crossing the seam's position. Facing segments (copies 1 and 2 at the same quarter point) first exchange: what one side sends fills the gap the other leaves,
 \begin{equation}
-  \Delta V=\Delta t\,h_{oc}\,(-\vect{v}\cdot\vect{n})_+\,|e|,\quad
-  V_k\mathrel{+}=\Delta V,\quad M_k\mathrel{+}=\rho_{oc}\Delta V,\quad S_k\mathrel{+}=\Delta V,\quad Z_k\mathrel{+}=0,
+  e_{12}=\min\big((o_1)_+,(-o_2)_+\big),\qquad e_{21}=\min\big((o_2)_+,(-o_1)_+\big),
 \end{equation}
-and $\Delta V$ is added to $V_{\mathrm{created}}$. The face-segment midpoint lies a quarter of the way along the seam edge, so $\vect{v}$ there is $\tfrac34\vect{v}_k+\tfrac14\vect{v}_m$.
-
-\paragraph{Trench faces.} On the subducting face, material leaves when $\vect{v}\cdot\vect{n}>0$:
-\begin{equation}
-  \Delta V=\Delta t\,h^\uparrow\,(\vect{v}\cdot\vect{n})_+\,|e|,\qquad
-  \Delta Z=\Delta t\,\Theta^\uparrow\,(\vect{v}\cdot\vect{n})_+\,|e|,
-\end{equation}
-removed from the copy (and $M$, $S$ likewise) and added to the subducted budgets. The removed heat deficit feeds the slab reservoir (Section~\ref{sec:sources}). The overriding face is material and carries no flux.
+carried upwind ($h$, $\rho_c$, $\Theta$, $s$ of the sender), as across an internal segment. The remainders sum to the physical convergence, $o_1+o_2=\Delta t\,(\vect{u}_1-\vect{u}_2)\cdot\vect{n}_1|e|$, whatever $\vect{w}$ is, and only they depend on the seam type:
+\begin{itemize}
+\item \textbf{trench:} convergent excess $(o_k)_+-e$ is subducted (removed with the copy's own $h,\rho_c,\Theta,s$ and added to the subducted budgets); only the subducting side's feeds the slab reservoir (Section~\ref{sec:sources});
+\item \textbf{ridge:} an unfilled gap $(-o_k)_+-e$ is new lithosphere: $\Delta V=h_{oc}\times$gap, $M\mathrel{+}=\rho_{oc}\Delta V$, $S\mathrel{+}=\Delta V$, $Z\mathrel{+}=0$, added to $V_{\mathrm{created}}$;
+\item otherwise excess stays (the cell thickens) and gaps stay unfilled (it thins): convergence at a transform or a closing ridge, and opening at a transform or trench, which the contact penalty keeps small.
+\end{itemize}
+Along an ordinary seam $\vect{w}$ makes one face material (the overriding face of a trench) or splits the motion evenly (ridges, transforms). This then reduces to one-sided rules: a ridge fills the gaps on both sides, and a trench removes what converges on its subducting face. At a transform it is an exchange at the mean velocity. It differs where $\vect{w}$ can satisfy no single rule, at junctions. An earlier version declared the overriding and closing faces flux-free. Faces that swept area there gained or lost area without material, and a uniform state drifted by about 1.5\% per Myr next to junctions.
 
 \paragraph{Geometric conservation law.} The area swept by a straight segment whose endpoints move linearly in time has a rate that is linear in time, so the midpoint rule is exact:
 \begin{equation}
@@ -598,18 +596,16 @@ A snap whose flip would invert a triangle falls back to splitting $ab$ at the fo
 \caption{\textsc{FluxUpdate}: conservative ALE transport}\label{alg:flux}
 \begin{algorithmic}[1]
 \State $\vect{x}^{n+1/2}\gets\vect{x}^n+\tfrac12\Delta t\,\vect{w}$; $\vect{v}\gets\vect{u}-\vect{w}$
-\For{each internal segment and each transform face, separating $(p,q)$}
+\For{each internal segment, separating $(p,q)$}
   \State $\vect{n}_e,|e|$ from $\vect{x}^{n+1/2}$; $\vect{v}_e\gets$ interpolate at the segment midpoint
   \State $r\gets p$ if $\vect{v}_e\cdot\vect{n}_e>0$ else $q$
   \State $\Phi^{V}_e\gets\Delta t\,h_r(\vect{x}_e)\,\vect{v}_e\cdot\vect{n}_e|e|$; $\Phi^{Z}_e\gets\Delta t\,\Theta_r(\vect{x}_e)\,\vect{v}_e\cdot\vect{n}_e|e|$
   \State store $(\Phi^V_e,\;\rho_r\Phi^V_e,\;\Phi^Z_e,\;s_r\Phi^V_e)$ in the segment's flux slot
 \EndFor
-\For{each ridge face segment of copy $k$}
-  \State $\Delta V\gets\Delta t\,h_{oc}(-\vect{v}\cdot\vect{n})_+|e|$; store as inflow $(\Delta V,\rho_{oc}\Delta V,0,\Delta V)$; $V_{\mathrm{created}}\mathrel{+}=\Delta V$
-\EndFor
-\For{each subducting trench face segment of copy $k$}
-  \State $\Delta V\gets\Delta t\,h_k(\vect{x}_e)(\vect{v}\cdot\vect{n})_+|e|$; $\Delta Z\gets\Delta t\,\Theta_k(\vect{x}_e)(\vect{v}\cdot\vect{n})_+|e|$
-  \State store as outflow; accumulate $\Delta V_k$, $\Delta Z_k$ for the slab; add to subducted budgets
+\For{each pair of facing seam face segments (copies 1, 2)}
+  \State $o_k\gets\Delta t\,\vect{v}_k\cdot\vect{n}_k|e|$; exchange $e_{12}$, $e_{21}$ upwind
+  \State trench: subduct convergent excess; feed the slab from the subducting side
+  \State ridge: fill unfilled gaps with new lithosphere, $V_{\mathrm{created}}\mathrel{+}=h_{oc}\times$gap
 \EndFor
 \For{each copy $i$}
   \State add the signed fluxes of its segments and faces to $(V_i,M_i,Z_i,S_i)$, in a fixed order
@@ -726,7 +722,7 @@ Each test exercises a distinct component and has an exact or algebraic answer.
 
 \paragraph{1. Budgets.} $\sum_iV_i$, $\sum_iM_i$ and $\sum_iZ_i$ must match their budget equations to round-off in every run, including across rebuilds, adaptation, ridge creation and subduction.
 
-\paragraph{2. Free-stream preservation.} Uniform state, $\vect{u}=0$, random smooth $\vect{w}$: all cell averages must stay uniform to round-off.
+\paragraph{2. Free-stream preservation.} Uniform state, $\vect{u}=0$, random smooth $\vect{w}$, applied to seam and junction markers as well as interior ones: all cell averages must stay uniform to round-off.
 
 \paragraph{3. Patch test.} Uniform $h$ and $\Theta$, no drag, cooling disabled, Dirichlet velocities from a linear field $\vect{u}=(ax,by)$ on the boundary: the solution must reproduce the linear field exactly, with $h,\Theta\propto e^{-(a+b)t}$.
 
