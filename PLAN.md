@@ -281,10 +281,52 @@ Edges across a band fail, because one end is up the flank. Edges beside a seam f
 - **Shear-only push:** 37 transform edges become trenches by 20 Myr. Possibly local compression on zig-zag edges.
 - **Initiation push:** seam edges grow from 61 to 132 by 8 Myr without nucleation. Possibly seam splits along the trench.
 
+## Slice 9: responsive page, and chasing the spike (in progress)
+
+### The page
+
+- **Responsiveness.** The simulation runs in a background worker built from the page's own script, and the page only draws. The page asks for the next update once the last has arrived, so a slow step never freezes drawing or input. A banner shows how long the current update has taken. If the browser refuses the worker, it runs in the page one step per task.
+  - Measured headless (software graphics): drawing stays at about 23 fps while the simulation computes.
+  - The simulation itself ran faster once off the drawing thread: 14 Myr in 10 s at 7,900 markers.
+- **Garbled mesh on a new seed.** The renderer re-uploads triangles when a topology counter changes, and each world started its counter afresh, so a new world could match the old number. The counter is now global.
+- **Also added:**
+  - a seed field;
+  - a floating banner for stop reasons and errors;
+  - "Extremes" (highest point and thickest crust, with what is there, and a button to face it);
+  - on phones, the globe is centred above the open controls.
+
+### The spike: a velocity runaway, with crust piling up downstream
+
+**Reproduced** headless at the default settings (seed 1, 7,900 markers): speeds of 3–5 cm/yr jump to hundreds or thousands of cm/yr within about a Myr, then subside. Crust piles up to hundreds of km where the runaway converges.
+
+**Defects found and fixed along the way:**
+
+| Fix | Blowup time (seed 1) |
+| --- | --- |
+| None | 15 Myr |
+| The overriding plate is no longer subducted | 22.8 Myr |
+| Polarity runs and tears | 32.6 Myr |
+| Leaky transforms, decompression melting, slab-pull cap | 32.6 Myr |
+
+1. **The overriding plate was subducted at its own trench.** The step-6 rule put convergent excess from either face of a trench down the trench. Only the subducting face's excess goes down now; overriding excess stays.
+2. **Trench polarity flipped at single markers.** One copy was overriding on one trench edge and subducting on the next, pulled under from both sides.
+   - Initiation now gives one polarity to each run of edges starting together. A run inherits an adjacent trench's polarity if that pushes down dense enough lithosphere.
+   - Remaining flips tear: the less dense side's edge becomes a transform and releases its slab. A tear changes one edge, so it can't cascade.
+   - Breakoff then polarity reversal still works, now with tears at the segment ends.
+3. **Gaps at transforms stayed unfilled,** thinning cells at ridge–transform corners by about 2% per Myr. Any unfilled gap is now new ocean lithosphere (a leaky transform).
+4. **Decompression melting.** Thin lithosphere that stretches adds oceanic crust; this is the distributed form of the ridge rule.
+5. **Slab-pull saturation.** W ≤ g ρm α Θ_ss L_max (49 TN/m at 660 km), replacing the old cumulative cutoff, and now on by default. In the slab-feedback check, the gain-1.41 case levels off near 9 cm/yr instead of running away.
+
+**Still open.** In seed 1 at 32.6 Myr the runaway starts with slab pull at only 21.5 TN/m, so the cap doesn't stop it.
+- **Where it starts:** in overriding copies at a ridge–trench junction that are fully damaged (integrity 0) and young.
+- **Delayed but not prevented** by a higher floor on damaged strength (s_min 0.3: 36.5 Myr).
+- **Reading, not proven:** damaged cells decouple from their plate. Edge loads (the free-face potential across the trench) then act on a single cell resisted only by its own basal drag.
+- **Unexplored option:** treat a sector bounded by seams and fully damaged lithosphere as below resolution, like a zip.
+
 ## Next, in order
 
 Physics first (see "How we work" in the README). Each step comes with component checks on small hand-built worlds (`makeWorld` with `plateOf`, `seamOf`, `stateOf`; `w.bodyForce`).
 
-The planned steps are done. Next is a whole-planet run in a real browser: the small planet (seed 11, 2,000 markers) used to stop at 5.8 Myr on junction slivers. Whatever limits it now decides the next step.
+Next: settle the open runaway above with you. It touches modelling choices: how weak fully damaged lithosphere is, and whether grid-scale microplates should exist.
 
 Numerics, only when stability or looks need them: second-order transport (§2.3), the exact intersection remap (§2.9), a geometric conservation law exact on the sphere, WebGPU kernels and multigrid (§3).

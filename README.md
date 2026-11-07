@@ -18,7 +18,7 @@ The whole app is one file, `index.html`. Its simulation script also runs as a ba
 | Plate strength | Multiplies the lithosphere's depth-integrated viscosity; takes effect immediately. The hint shows the drag length under old ocean |
 | Creep exponent n | Power-law creep exponent; higher n makes plate interiors stiffer and boundaries weaker |
 | Keel drag c_k | How much basal drag grows with lithospheric thickness (crust + thermal lithosphere) |
-| Slab assimilation τ_a | How long a slab keeps pulling after it sinks; longer means stronger slab pull. The hint gives the steady pull per cm/yr of subduction |
+| Slab assimilation τ_a | How long a slab keeps pulling after it sinks; longer means stronger slab pull, which saturates at the pull of a slab reaching the transition zone (660 km). The hint gives the steady pull per cm/yr of subduction |
 | Mesh velocity | Markers follow the material (the method's default) or stay put apart from smoothing; seams move either way |
 | Smoothing κm | Mesh-velocity relaxation per step |
 | Stats | Seam events so far: nucleations and heals, subduction starts, breakoffs and stalls, rifts and ridge deaths |

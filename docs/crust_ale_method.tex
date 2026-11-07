@@ -223,7 +223,7 @@ The slab is represented, per unit trench length, by its negative buoyancy $W$ an
   \qquad \frac{dL}{dt} = v_s ,
   \label{eq:slab}
 \end{equation}
-where $\Theta_{\mathrm{tr}}$ is the heat deficit of lithosphere arriving at the trench and $\tau_a$ is a thermal assimilation time. Optionally, input stops once $L$ exceeds $L_{\max}$ (the slab reaching the transition zone). When the lithosphere arriving at the trench is no longer negatively buoyant, the slab breaks off (Section~\ref{sec:lifecycle}): its reservoir is released to the mantle and stops pulling. The net line force on the subducting face is
+where $\Theta_{\mathrm{tr}}$ is the heat deficit of lithosphere arriving at the trench and $\tau_a$ is a thermal assimilation time. Slab pull saturates: only the slab down to the transition zone at depth $L_{\max}$ pulls, so $W\le W_{\max}=g\rho_m\alpha\Theta_{ss}L_{\max}$ (about 49~TN/m for $L_{\max}=660$~km). Without the cap, the reservoir's input is proportional to subduction speed, which closes a feedback loop with gain $\tau_ag\rho_m\alpha\Theta_{\mathrm{tr}}/\xi$ in the limit of a plate that is all trench. That gain exceeds 1 wherever the arriving heat deficit is above about 1.7 times its 80~Myr value at $\tau_a=5$~Myr, and convergent piling produces such cells. When the lithosphere arriving at the trench is no longer negatively buoyant, the slab breaks off (Section~\ref{sec:lifecycle}): its reservoir is released to the mantle and stops pulling. The net line force on the subducting face is
 \begin{equation}
   \vect{f}_{\mathrm{slab}} = \big(W - \xi\,(\vect{u}_{\mathrm{sub}}\cdot\vect{n})\big)\,\vect{n},
   \label{eq:slabforce}
@@ -249,16 +249,17 @@ Event & From $\to$ to & Condition\\
 \midrule
 Nucleation & interior $\to$ transform & the edge lies along a crease of integrity: both ends below $s_{\mathrm{nuc}}$, both flanking markers less damaged than either end\\
 Healing & transform $\to$ interior & integrity back above $s_{\mathrm{heal}}$ and slip below $v_h$\\
-Subduction initiation & transform $\to$ trench & contact compression above $P_i$ and $\mathcal N>\mathcal N_i$ on the denser side, which subducts\\
+Subduction initiation & transform $\to$ trench & contact compression above $P_i$ and $\mathcal N>\mathcal N_i$ on the denser side, which subducts; edges starting together along a chain take one polarity, inherited from an adjacent trench if that pushes down lithosphere with $\mathcal N>\mathcal N_i$\\
 Rifting & transform $\to$ ridge & contact tension above $T_r$ and $\delta<\delta_r$ on both sides\\
 Breakoff & trench $\to$ transform & arriving lithosphere has $\mathcal N\le\mathcal N_b$; the slab is released\\
 Stall & trench $\to$ transform & convergence below $v_s$; the slab is released\\
 Ridge death & ridge $\to$ transform & opening below $v_s$\\
+Tear & trench $\to$ transform & at once: adjacent trench edges at a two-copy marker subduct different plates; the edge whose subducting side is less dense tears off and releases its slab\\
 \bottomrule
 \end{tabular}
 \end{center}
 
-A transform is held shut by the contact penalty, so the normal force it carries, compression or tension, measures how it is loaded; that force decides whether it becomes a trench or a ridge. Each condition must hold for a persistence time before the event fires, and the thresholds for leaving a state lie beyond those for entering it ($s_{\mathrm{heal}}>s_{\mathrm{nuc}}$; a stalled trench converges more slowly than $P_i/\xi$, the rate at which the same load would restart it), so that boundaries do not flicker. A trench lives only while it is fed with sinking lithosphere: when a continent or a young, buoyant flank arrives, the slab detaches and the boundary carries on as a transform. If convergence continues and the lithosphere on the other side is dense, subduction restarts with the opposite polarity. A ridge that stops opening becomes a transform, which heals once its damage recovers.
+A transform is held shut by the contact penalty, so the normal force it carries, compression or tension, measures how it is loaded; that force decides whether it becomes a trench or a ridge. Each condition must hold for a persistence time before the event fires, and the thresholds for leaving a state lie beyond those for entering it ($s_{\mathrm{heal}}>s_{\mathrm{nuc}}$; a stalled trench converges more slowly than $P_i/\xi$, the rate at which the same load would restart it), so that boundaries do not flicker. A trench lives only while it is fed with sinking lithosphere: when a continent or a young, buoyant flank arrives, the slab detaches and the boundary carries on as a transform. If convergence continues and the lithosphere on the other side is dense, subduction restarts with the opposite polarity. Oppositely dipping slabs cannot meet at a point, so where a reversed segment meets a trench still subducting the other way, a tear separates them and the edge between becomes a transform. Without that rule a marker could be overriding on one trench edge and subducting on the next, pulled under from both sides with nothing to absorb it: plates there ran away to hundreds of cm/yr. A ridge that stops opening becomes a transform, which heals once its damage recovers.
 
 A fault forms along the weakest line of a damaged band, not across its width: nucleating every damaged edge would fill a band several cells wide with seams. The crease test picks the band's minimum line. Edges across the band fail it, because one end is up the band's flank. Edges beside a seam fail it too, because the seam's own markers (integrity $\approx0$) are lower. A marker's integrity is that of its most damaged copy. Nucleation depends on the mesh, because a continuum band cannot narrow below a cell. The resolution therefore sets how finely faults can branch, and is part of a world's character.
 
@@ -419,10 +420,11 @@ where $h^\uparrow$ is the reconstruction~\eqref{eq:recon} of the upwind cell eva
 \end{equation}
 carried upwind ($h$, $\rho_c$, $\Theta$, $s$ of the sender), as across an internal segment. The remainders sum to the physical convergence, $o_1+o_2=\Delta t\,(\vect{u}_1-\vect{u}_2)\cdot\vect{n}_1|e|$, whatever $\vect{w}$ is, and only they depend on the seam type:
 \begin{itemize}
-\item \textbf{trench:} convergent excess $(o_k)_+-e$ is subducted (removed with the copy's own $h,\rho_c,\Theta,s$ and added to the subducted budgets); only the subducting side's feeds the slab reservoir (Section~\ref{sec:sources});
-\item \textbf{ridge:} an unfilled gap $(-o_k)_+-e$ is new lithosphere: $\Delta V=h_{oc}\times$gap, $M\mathrel{+}=\rho_{oc}\Delta V$, $S\mathrel{+}=\Delta V$, $Z\mathrel{+}=0$, added to $V_{\mathrm{created}}$;
-\item otherwise excess stays (the cell thickens) and gaps stay unfilled (it thins): convergence at a transform or a closing ridge, and opening at a transform or trench, which the contact penalty keeps small.
+\item \textbf{trench, subducting face:} convergent excess $(o_k)_+-e$ is subducted (removed with the copy's own $h,\rho_c,\Theta,s$, added to the subducted budgets) and feeds the slab reservoir (Section~\ref{sec:sources});
+\item \textbf{any face:} an unfilled gap $(-o_k)_+-e$ is new lithosphere, because wherever plates part the mantle fills in (at a ridge, or at an opening transform, which is then leaky): $\Delta V=h_{oc}\times$gap, $M\mathrel{+}=\rho_{oc}\Delta V$, $S\mathrel{+}=\Delta V$, $Z\mathrel{+}=0$, added to $V_{\mathrm{created}}$;
+\item otherwise excess stays and the cell thickens: convergence at a transform, a closing ridge, or a trench's overriding face. The overriding plate is never subducted.
 \end{itemize}
+An earlier version subducted excess from either face of a trench. Wherever the mesh velocity did not follow the overriding plate exactly, that consumed the overriding plate's crust at its own trench. A thinned plate is weaker and lighter, so it moved faster and thinned faster, and on whole planets this ran away within tens of Myr. Unfilled gaps away from ridges used to stay unfilled, which thinned cells at ridge--transform corners by about 2\% per Myr.
 Along an ordinary seam $\vect{w}$ makes one face material (the overriding face of a trench) or splits the motion evenly (ridges, transforms). This then reduces to one-sided rules: a ridge fills the gaps on both sides, and a trench removes what converges on its subducting face. At a transform it is an exchange at the mean velocity. It differs where $\vect{w}$ can satisfy no single rule, at junctions. An earlier version declared the overriding and closing faces flux-free. Faces that swept area there gained or lost area without material, and a uniform state drifted by about 1.5\% per Myr next to junctions.
 
 \paragraph{Geometric conservation law.} The area swept by a straight segment whose endpoints move linearly in time has a rate that is linear in time, so the midpoint rule is exact:
@@ -452,6 +454,8 @@ with $\Theta_i$ floored at zero and $\edot_{E,i}$ the area-weighted average over
   L_k\gets L_k+\frac{\Delta V_k}{h_k\,\ell_k}.
 \end{equation}
 Since $\Delta Z_k/\ell_k=\Theta_{\mathrm{tr}}v_s\Delta t$, this is~\eqref{eq:slab} integrated over the step.
+
+\paragraph{Decompression melting.} Where thin lithosphere stretches, the mantle rising beneath it melts and adds oceanic crust. This is the distributed form of what a ridge face does: the new area fraction $1-e^{-(\nabla\cdot\vect{u})_+\Delta t}$ is filled with $h_{oc}$ of crust at $\rho_{oc}$, $\Theta=0$, intact, with a yield $f=(1-\delta/\delta_{\mathrm{rift}})_+$ that tapers from all of it with no lithosphere to none at the rifting thickness. Thicker lithosphere only thins as it stretches (a rift basin). Without this, a stretching patch of plate thins towards no crust at all, since new crust appears only at ridge faces.
 
 \subsection{Seam events}
 \label{sec:events}
@@ -604,8 +608,8 @@ A snap whose flip would invert a triangle falls back to splitting $ab$ at the fo
 \EndFor
 \For{each pair of facing seam face segments (copies 1, 2)}
   \State $o_k\gets\Delta t\,\vect{v}_k\cdot\vect{n}_k|e|$; exchange $e_{12}$, $e_{21}$ upwind
-  \State trench: subduct convergent excess; feed the slab from the subducting side
-  \State ridge: fill unfilled gaps with new lithosphere, $V_{\mathrm{created}}\mathrel{+}=h_{oc}\times$gap
+  \State trench: subduct convergent excess on the subducting face; feed the slab
+  \State any seam: fill unfilled gaps with new lithosphere, $V_{\mathrm{created}}\mathrel{+}=h_{oc}\times$gap
 \EndFor
 \For{each copy $i$}
   \State add the signed fluxes of its segments and faces to $(V_i,M_i,Z_i,S_i)$, in a fixed order
@@ -623,7 +627,7 @@ A snap whose flip would invert a triangle falls back to splitting $ab$ at the fo
 \EndFor
 \For{each subducting trench copy $k$}
   \State $W_k\gets W_ke^{-\Delta t/\tau_a}+g\rho_m\alpha\,\Delta Z_k/\ell_k$; $L_k\gets L_k+\Delta V_k/(h_k\ell_k)$
-  \If{$L_k>L_{\max}$ and saturation enabled} stop further input to $W_k$ \EndIf
+  \State $W_k\gets\min(W_k,W_{\max})$ \Comment{slab pull saturates at the transition zone}
 \EndFor
 \end{algorithmic}
 \end{algorithm}

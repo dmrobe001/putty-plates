@@ -236,7 +236,7 @@ kbd { font-family: var(--font-data); font-size: 0.72rem; border: 1px solid var(-
     <dt>Land above sea level</dt><dd id="sLand">–</dd>
     <dt>Speed median · max</dt><dd id="sSpeed">–</dd>
     <dt>Seams nucleated · healed</dt><dd id="sEv1">–</dd>
-    <dt>Subduction starts · breakoffs · stalls</dt><dd id="sEv2">–</dd>
+    <dt>Subduction starts · breakoffs · stalls · tears</dt><dd id="sEv2">–</dd>
     <dt>Rifts · ridge deaths</dt><dd id="sEv3">–</dd>
     <dt>Slab pull mean · max along trenches</dt><dd id="sSlab">–</dd>
     <dt>Solver iterations in passes · residual</dt><dd id="sSolve">–</dd>
@@ -438,7 +438,7 @@ const RHEO = {
   Bc: 1e26, Bl: 2e25,        // strength per km of crust and of thermal lithosphere (n = 1: Ĥ = ½ f(s)(Bc h + Bl δ)), N·s/m per km
   beta0: 1.5e14, ck: 3, H0: 150, mk: 3, // basal drag β = β0 [1 + ck (H/H0)^m], H = h + δ (eq. drag)
   Cn_tf: 1e23,               // contact penalty: normal motion a seam cannot absorb
-  tau_a: 5, xi: 2e22, Lmax: 0, // slab: assimilation time (Myr), mantle drag on the sinking slab (N·s/m²), optional input cutoff (km; 0 = off)
+  tau_a: 5, xi: 2e22, Lmax: 660, // slab: assimilation time (Myr), mantle drag on the sinking slab (N·s/m²), depth at which slab pull saturates (km; 0 = no cap)
   Cn_tr: 1e19,               // trench, converging: subduction takes up convergence (shear coupling C_t = Ĥ(s)/w for every seam)
                              // (an opening trench or a closing ridge uses the stiff Cn_tf: see seamContact)
   strength: 1,               // multiplier on Bc and Bl (UI)
@@ -630,6 +630,18 @@ function seamContact(w) {
 // the seam contact states from its normal jumps, then solves. A step does a few passes and continues
 // from there at the next step (warm start); the first solve iterates to convergence.
 // Area-weighted mean of the triangle strain rates around each copy, 1/Myr.
+// Area dilatation rate ∇·u (1/Myr) per copy, area-weighted over its triangles: positive where the sheet stretches.
+function copyDivergence(w, U) {
+  const E = markerBases(w.X), fr = newFrame(), X = w.X, T = w.T, TC = w.TC, nc = w.CM.length, out = new Float64Array(nc), ws = new Float64Array(nc);
+  for (let t = 0; t < w.TP.length; t++) {
+    const m = [T[3*t], T[3*t+1], T[3*t+2]]; elementFrame(X, E, m[0], m[1], m[2], fr); let d = 0;
+    for (let k = 0; k < 3; k++) { const c = TC[3*t+k], o = 6 * m[k], R = fr.R;
+      const q1 = U[3*c]*E[o] + U[3*c+1]*E[o+1] + U[3*c+2]*E[o+2], q2 = U[3*c]*E[o+3] + U[3*c+1]*E[o+4] + U[3*c+2]*E[o+5];
+      d += fr.gx[k] * (R[4*k] * q1 + R[4*k+1] * q2) + fr.gy[k] * (R[4*k+2] * q1 + R[4*k+3] * q2); }
+    const a = sphArea(X, m[0], m[1], m[2]); for (let k = 0; k < 3; k++) { out[TC[3*t+k]] += a * d; ws[TC[3*t+k]] += a; } }
+  for (let c = 0; c < nc; c++) out[c] /= ws[c] || 1;
+  return out;
+}
 function copyStrainRates(w, U) {
   const et = strainRates(w, U), T = w.T, TC = w.TC, X = w.X, nc = w.CM.length, ec = new Float64Array(nc), ws = new Float64Array(nc);
   for (let t = 0; t < w.TP.length; t++) { const a = sphArea(X, T[3*t], T[3*t+1], T[3*t+2]); for (let k = 0; k < 3; k++) { ec[TC[3*t+k]] += a * et[t]; ws[TC[3*t+k]] += a; } }
@@ -1355,7 +1367,7 @@ function makeWorld(params) {
   }
   maintain(w); // a Delaunay clean-up after seam straightening (flips only change areas, never integrals)
   w.ops = { split: 0, collapse: 0, seam: 0, flip: 0, zip: 0, snap: 0, seamSplit: 0 };
-  w.events = { nucleate: 0, heal: 0, subduct: 0, breakoff: 0, stall: 0, rift: 0, ridgeDeath: 0 }; w.nuc = new Map();
+  w.events = { nucleate: 0, heal: 0, subduct: 0, breakoff: 0, stall: 0, rift: 0, ridgeDeath: 0, tear: 0 }; w.nuc = new Map();
   const sum0 = k => w[k].reduce((s, v) => s + v, 0);
   w.budget = { V0: sum0('V'), M0: sum0('M'), Z0: sum0('Z'), Vc: 0, Mc: 0, Vs: 0, Ms: 0, Zs: 0, Zsrc: 0 };
   solveVelocity(w, RHEO.maxIter, RHEO.firstPasses);
@@ -1476,9 +1488,9 @@ function fluxes(w, dt, Xh, Wm) {
     // Each face sweeps area at its own (u − w)·n, so every face carries a flux (geometric conservation). Motion
     // relative to the mesh is material crossing the seam's position: what one side sends fills a gap the
     // other side leaves (exchange, upwind). Only the remainder depends on the seam type, and it sums to the
-    // physical convergence (u1 − u2)·n, independent of w: convergent excess is subducted at a trench (from
-    // either face; only the subducting side's feeds the slab) and stays put (thickening) elsewhere; an
-    // unfilled gap is new ocean lithosphere at a ridge and stays unfilled (thinning) elsewhere. Along an
+    // physical convergence (u1 − u2)·n, independent of w: convergent excess on a trench's subducting face is
+    // subducted and feeds the slab; elsewhere (the overriding face included) it stays put, thickening the cell.
+    // An unfilled gap is new ocean lithosphere on any seam: wherever plates part, the mantle fills in. Along an
     // ordinary seam w makes one face material, and this reduces to the one-sided ridge and trench rules and
     // to the mean-velocity exchange at transforms; it differs where w cannot, at junctions.
     const side = type === TRENCH ? w.sSub[e] : 0;
@@ -1490,11 +1502,11 @@ function fluxes(w, dt, Xh, Wm) {
       const e12 = Math.min(Math.max(0, o1), Math.max(0, -o2)), e21 = Math.min(Math.max(0, o2), Math.max(0, -o1));
       if (e12 > 0) move(c1, c2, e12); if (e21 > 0) move(c2, c1, e21);
       for (const [c, o, ex, sd] of [[c1, o1, e12 + e21, 1], [c2, o2, e12 + e21, 2]]) {
-        if (o > 0 && type === TRENCH && side) { // convergent excess goes down the trench
+        if (o > 0 && type === TRENCH && sd === side) { // convergent excess on the subducting face goes down the trench
           const q = o - (sd === 1 ? e12 : e21), dv = h[c] * q, dm = rho[c] * dv, dz = th[c] * q; if (!(q > 0)) continue;
           dV[c] -= dv; dM[c] -= dm; dZ[c] -= dz; dS[c] -= sI[c] * dv; B.Vs += dv; B.Ms += dm; B.Zs += dz;
-          if (sd === side) { slabZ[c] += dz; slabA[c] += q; }
-        } else if (o < 0 && type === RIDGE) { // unfilled gap: new lithosphere
+          slabZ[c] += dz; slabA[c] += q;
+        } else if (o < 0) { // unfilled gap: plates parting make new lithosphere, at a ridge or anywhere else (a leaky transform)
           const g = -o - (sd === 1 ? e21 : e12); if (!(g > 0)) continue; const q = g * PHYS.h_oc;
           dV[c] += q; dM[c] += PHYS.rho_oc * q; dS[c] += q; B.Vc += q; B.Mc += PHYS.rho_oc * q;
         }
@@ -1508,11 +1520,15 @@ function fluxes(w, dt, Xh, Wm) {
 // deficit that subducted; L grows by the area of lithosphere that went down. Held per copy as line
 // integrals ∫W dℓ (N) and ∫L dℓ (m²).
 function slabSources(w, dt, slabZ, slabA) {
+  // Slab pull saturates: a slab hanging down to L_max (the transition zone) is all that pulls, so W can never
+  // exceed the pull of L_max of saturated lithosphere, W_max = g ρm α Θ_ss L_max (about 49 TN/m for 660 km).
+  // Without the cap the reservoir's input, proportional to subduction speed, closes a loop whose gain exceeds 1
+  // wherever the arriving lithosphere's heat deficit beats the slab drag, and plates ran away to metres a year.
   const decay = Math.exp(-dt / RHEO.tau_a), gain = G * PHYS.rho_m * PHYS.alpha * 1000 * R_M * R_M; // Z is in K·km·sr
-  const tlen = RHEO.Lmax > 0 ? trenchLengths(w) : null;
+  const Wmax = G * PHYS.rho_m * PHYS.alpha * PHYS.Theta_ss * 1000 * RHEO.Lmax * 1000, tlen = RHEO.Lmax > 0 ? trenchLengths(w) : null;
   for (let c = 0; c < w.CM.length; c++) {
-    w.Wl[c] *= decay;
-    if (slabZ[c] > 0 && !(tlen && tlen[c] > 0 && w.Ll[c] / tlen[c] > 1000 * RHEO.Lmax)) w.Wl[c] += gain * slabZ[c];
+    w.Wl[c] = w.Wl[c] * decay + gain * slabZ[c];
+    if (tlen && w.Wl[c] > Wmax * tlen[c]) w.Wl[c] = Wmax * tlen[c];
     w.Ll[c] += slabA[c] * R_M * R_M;
   }
 }
@@ -1604,9 +1620,42 @@ function seamEvents(w, dt) {
     if (clock >= LIFE.tau) fired.push({ key, ev: 'nucleate' }); else nuc.set(key, clock);
   }
   w.nuc = nuc;
+  // Trench polarity along a chain (§1.10): at a marker with two copies, adjacent trench edges must subduct the
+  // same copy. Oppositely dipping slabs cannot meet at a point; in nature a tear separates them, linked by a
+  // transform. A new trench therefore inherits the polarity of an adjacent trench when that pushes down dense
+  // enough lithosphere; where adjacent trench edges still disagree, the edge whose subducting side is less
+  // dense becomes a transform and releases its slab. A tear changes one edge, so it cannot cascade.
+  const subCopy = (e, m) => { const sd = w.sSub[e]; if (w.sT[e] !== TRENCH || !sd) return -1; return w.sC[4*e + (sd === 1 ? 0 : 2) + (w.sA[e] === m ? 0 : 1)]; };
+  for (let m = 0; m < X.length / 3; m++) { if (w.sCount[m] !== 2 || w.cOff[m + 1] - w.cOff[m] !== 2) continue;
+    const e1 = w.sEdge[2*m], e2 = w.sEdge[2*m+1], c1 = subCopy(e1, m), c2 = subCopy(e2, m); if (c1 < 0 || c2 < 0 || c1 === c2) continue;
+    const i1 = w.seamInfo.get(KEY(w.sA[e1], w.sB[e1])), i2 = w.seamInfo.get(KEY(w.sA[e2], w.sB[e2]));
+    if (i1.type !== TRENCH || i2.type !== TRENCH) continue; // already torn this step
+    const first = N[c1] !== N[c2] ? N[c1] < N[c2] : (i1.since || 0) >= (i2.since || 0); // the less dense side's slab tears off (ties: the younger)
+    const [e, info] = first ? [e1, i1] : [e2, i2], o = info.side === 2 ? 2 : 0;
+    for (const c of [w.sC[4*e + o], w.sC[4*e + o + 1]]) { w.Wl[c] = 0; w.Ll[c] = 0; }
+    info.type = TRANSFORM; info.side = 0; info.pending = null; info.clock = 0; w.events.tear = (w.events.tear || 0) + 1; fired.push({ ev: 'tearOnly' }); }
   if (!fired.length) return;
   let topo = false;
+  // New trenches: one polarity per connected run of edges starting to subduct together (linked through
+  // two-copy markers), taken from an adjacent existing trench if there is one, else by majority of the edges'
+  // own choices (the denser side).
+  { const sub = new Map(); for (const f of fired) if (f.ev === 'subduct') sub.set(f.e, f);
+    const other = (e, m) => w.sEdge[2*m] === e ? w.sEdge[2*m+1] : w.sEdge[2*m];
+    const chain = m => w.sCount[m] === 2 && w.cOff[m + 1] - w.cOff[m] === 2;
+    const sideOf = (e, m, c) => { const k = w.sA[e] === m ? 0 : 1; return w.sC[4*e + k] === c ? 1 : w.sC[4*e + 2 + k] === c ? 2 : 0; };
+    const copyOf = (e, m, sd) => w.sC[4*e + (sd === 1 ? 0 : 2) + (w.sA[e] === m ? 0 : 1)];
+    const done = new Set();
+    for (const e0 of sub.keys()) { if (done.has(e0)) continue;
+      const rel = new Map([[e0, 1]]), run = [e0]; done.add(e0); let anchor = 0; // anchor: side of e0 implied by an existing trench
+      for (let k = 0; k < run.length; k++) { const e = run[k];
+        for (const m of [w.sA[e], w.sB[e]]) { if (!chain(m)) continue; const o = other(e, m), c = copyOf(e, m, rel.get(e));
+          if (sub.has(o)) { if (!rel.has(o)) { rel.set(o, sideOf(o, m, c)); run.push(o); done.add(o); } }
+          else if (!anchor && w.sT[o] === TRENCH && w.sSub[o]) { const cs = copyOf(o, m, w.sSub[o]); if (N[cs] > LIFE.Non) anchor = cs === c ? 1 : 2; } } } // only if what it would push down is dense enough
+      let agree = 0; for (const e of run) agree += sub.get(e).side === rel.get(e) ? 1 : -1;
+      const flip = anchor ? anchor === 2 : agree < 0;
+      for (const e of run) sub.get(e).side = flip ? 3 - rel.get(e) : rel.get(e); } }
   for (const f of fired) {
+    if (f.ev === 'tearOnly') continue;
     w.events[f.ev]++;
     if (f.ev === 'nucleate') { w.seamInfo.set(f.key, { type: TRANSFORM, side: 0 }); topo = true; continue; }
     if (f.ev === 'heal') { w.seamInfo.delete(f.key); topo = true; continue; }
@@ -1616,7 +1665,7 @@ function seamEvents(w, dt) {
       for (const c of [w.sC[4*f.e + o], w.sC[4*f.e + o + 1]]) { w.Wl[c] = 0; w.Ll[c] = 0; }
       info.type = TRANSFORM; info.side = 0;
     } else if (f.ev === 'ridgeDeath') info.type = TRANSFORM;
-    else if (f.ev === 'subduct') { info.type = TRENCH; info.side = f.side; }
+    else if (f.ev === 'subduct') { info.type = TRENCH; info.side = f.side; info.since = w.t; }
     else if (f.ev === 'rift') info.type = RIDGE;
   }
   if (topo) rebuildCopies(w); else deriveCopies(w);
@@ -1695,6 +1744,15 @@ function step(w, dtWant, retry = true) {
       const th2 = Math.max(0, Math.sqrt(th * th + 4 * PHYS.kappa * PHYS.dT * PHYS.dT * dt / Math.PI) - PHYS.qcool * dt);
       const Zn = A * th2; B.Zsrc += Zn - w.Z[c]; w.Z[c] = Zn;
     }
+    // Decompression melting (§1.4): where thin lithosphere stretches, the mantle rising beneath it melts and adds
+    // oceanic crust, the distributed form of what a ridge face does. New area fraction ∇·u Δt is filled with
+    // h_oc of crust at ρ_oc, Θ = 0, intact; the yield tapers from all of it with no lithosphere to none at the
+    // rifting thickness δ_rift, above which stretching only thins (a rift basin).
+    if (!w.noSources) { const dv = copyDivergence(w, w.U);
+      for (let c = 0; c < w.CM.length; c++) { if (!(dv[c] > 0)) continue;
+        const f = 1 - thermalThickness(Math.max(0, w.Z[c] / w.A[c])) / LIFE.deltaRift; if (f <= 0) continue;
+        const q = PHYS.h_oc * f * (1 - Math.exp(-dv[c] * dt)) * w.A[c];
+        w.V[c] += q; w.M[c] += PHYS.rho_oc * q; w.S[c] += q; B.Vc += q; B.Mc += PHYS.rho_oc * q; } }
     slabSources(w, dt, F.slabZ, F.slabA);
     if (!w.noDamage) { const ec = copyStrainRates(w, w.U), es = seamStrainRates(w); for (let c = 0; c < ec.length; c++) ec[c] = Math.max(ec[c], es[c]); damageSources(w, dt, ec); }
     if (!w.noEvents) seamEvents(w, dt);
@@ -2089,7 +2147,7 @@ function refreshStats(land) {
   $('sLand').textContent = `${(100 * land).toFixed(1)} %`;
   $('sSpeed').textContent = `${S.speedMed.toFixed(1)} · ${S.speedMax.toFixed(1)} cm/yr`;
   $('sSlab').textContent = S.slab ? `${(S.slab[0] / 1e12).toFixed(1)} · ${(S.slab[1] / 1e12).toFixed(1)} TN/m` : '–';
-  const E = S.events; $('sEv1').textContent = `${E.nucleate} · ${E.heal}`; $('sEv2').textContent = `${E.subduct} · ${E.breakoff} · ${E.stall}`; $('sEv3').textContent = `${E.rift} · ${E.ridgeDeath}`;
+  const E = S.events; $('sEv1').textContent = `${E.nucleate} · ${E.heal}`; $('sEv2').textContent = `${E.subduct} · ${E.breakoff} · ${E.stall} · ${E.tear}`; $('sEv3').textContent = `${E.rift} · ${E.ridgeDeath}`;
   $('sSolve').textContent = S.solve ? `${S.solve.iters} in ${S.solve.passes} · ${S.solve.residual.toExponential(0)}` : '–';
   $('sFlux').textContent = `${(S.created * km3).toFixed(1)} · ${(S.subducted * km3).toFixed(1)} M km³`;
   $('sBudget').textContent = S.budget.map(v => v.toExponential(0)).join(' · ');

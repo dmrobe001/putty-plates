@@ -83,7 +83,7 @@ require('./harness').inPage(() => {
       while (w.t < 40 && !w.exhausted) { advance(w, 5); sp.push(+capSpeed(w).toFixed(2)); }
       res.slabFeedback.push({ tau_a: tau, Gamma: +Gam.toFixed(2),
         v0_cm_yr: +v0.toFixed(2), v0_pred: +(F / (bA + RHEO.xi * ell) * SEC_MYR / 1e4).toFixed(2),
-        v_terminal_pred: Gam < 1 ? +(F / (bA + RHEO.xi * ell - Gl) * SEC_MYR / 1e4).toFixed(2) : 'runaway',
+        v_terminal_pred: Gam < 1 ? +(F / (bA + RHEO.xi * ell - Gl) * SEC_MYR / 1e4).toFixed(2) : 'runaway without the slab-pull cap (W ≤ g ρm α Θ_ss L_max); levels off with it',
         v_every_5_Myr: sp.join(' '), stopped: w.exhausted ? w.fail : null });
       if (tau === 5) { // the reservoir is a line integral owned by copies: mesh maintenance must not change its total
         const tot = () => w.Wl.reduce((q, v) => q + v, 0), before = tot(), o = { ...w.ops };
