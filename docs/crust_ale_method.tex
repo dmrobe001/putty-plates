@@ -247,7 +247,7 @@ Damage decides where a seam exists; motion and buoyancy decide its type. Every e
 \toprule
 Event & From $\to$ to & Condition\\
 \midrule
-Nucleation & interior $\to$ transform & integrity of the band across an edge below $s_{\mathrm{nuc}}$\\
+Nucleation & interior $\to$ transform & the edge lies along a crease of integrity: both ends below $s_{\mathrm{nuc}}$, both flanking markers less damaged than either end\\
 Healing & transform $\to$ interior & integrity back above $s_{\mathrm{heal}}$ and slip below $v_h$\\
 Subduction initiation & transform $\to$ trench & contact compression above $P_i$ and $\mathcal N>\mathcal N_i$ on the denser side, which subducts\\
 Rifting & transform $\to$ ridge & contact tension above $T_r$ and $\delta<\delta_r$ on both sides\\
@@ -260,7 +260,7 @@ Ridge death & ridge $\to$ transform & opening below $v_s$\\
 
 A transform is held shut by the contact penalty, so the normal force it carries, compression or tension, measures how it is loaded; that force decides whether it becomes a trench or a ridge. Each condition must hold for a persistence time before the event fires, and the thresholds for leaving a state lie beyond those for entering it ($s_{\mathrm{heal}}>s_{\mathrm{nuc}}$; a stalled trench converges more slowly than $P_i/\xi$, the rate at which the same load would restart it), so that boundaries do not flicker. A trench lives only while it is fed with sinking lithosphere: when a continent or a young, buoyant flank arrives, the slab detaches and the boundary carries on as a transform. If convergence continues and the lithosphere on the other side is dense, subduction restarts with the opposite polarity. A ridge that stops opening becomes a transform, which heals once its damage recovers.
 
-Nucleation depends on the mesh, because a continuum band cannot narrow below a cell. The resolution therefore sets how finely faults can branch, and is part of a world's character.
+A fault forms along the weakest line of a damaged band, not across its width: nucleating every damaged edge would fill a band several cells wide with seams. The crease test picks the band's minimum line. Edges across the band fail it, because one end is up the band's flank. Edges beside a seam fail it too, because the seam's own markers (integrity $\approx0$) are lower. A marker's integrity is that of its most damaged copy. Nucleation depends on the mesh, because a continuum band cannot narrow below a cell. The resolution therefore sets how finely faults can branch, and is part of a world's character.
 
 Plates are not tracked as objects. A plate is a connected region bounded by seams; plates appear when seams link up into closed loops, and disappear when they are consumed or when the seams around them heal.
 
@@ -741,7 +741,7 @@ Each test exercises a distinct component and has an exact or algebraic answer.
 \end{equation}
 so the plate reaches the terminal velocity this predicts when $\Gamma<1$, and accelerates without bound otherwise. Both regimes should be reproduced, and the approach to steady state should take a few $\tau_a$.
 
-\paragraph{8. Seam events.} Budgets close to round-off across every nucleation, healing and relabelling, and a uniform state stays uniform when copies are split or merged. Scenarios check each rule: an idle transform heals; a seamless sheet under sustained shear nucleates transforms along the shear zone; a transform pushed shut between old and young lithosphere becomes a trench with the old side subducting; a transform pulled apart opens a ridge in thin lithosphere but not in thick; a ridge pushed shut becomes a transform; and a plate carrying a continent into a trench loses its slab when the continent arrives. Without an external push the plate then decelerates over a few $\tau_a$; with one, subduction may restart with the opposite polarity.
+\paragraph{8. Seam events.} Budgets close to round-off across every nucleation, healing and relabelling, and a uniform state stays uniform when copies are split or merged. Scenarios check each rule: an idle transform heals; a seamless sheet under sustained shear nucleates a transform along the middle of the shear zone, as a few connected chains rather than a swath; a transform pushed shut between old and young lithosphere becomes a trench with the old side subducting; a transform pulled apart opens a ridge in thin lithosphere but not in thick; a ridge pushed shut becomes a transform; and a plate carrying a continent into a trench loses its slab when the continent arrives. Without an external push the plate then decelerates over a few $\tau_a$; with one, subduction may restart with the opposite polarity.
 
 \paragraph{9. Sensitivity.} Features reported as results must persist under resolution refinement, rebuild frequency, mesh-velocity parameters, adaptation thresholds, seam-event thresholds and persistence times, and comparison of GPU and reference implementations.
 

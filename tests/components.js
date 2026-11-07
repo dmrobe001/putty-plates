@@ -162,7 +162,14 @@ require('./harness').inPage(() => {
 
       let near = 0; for (let e = 0; e < w.sA.length; e++) { const z = 0.5 * (w.X[3*w.sA[e]+2] + w.X[3*w.sB[e]+2]); if (Math.abs(z) < Math.sin(10 * Math.PI / 180)) near++; }
       let split = 0; for (let m = 0; m < w.X.length / 3; m++) if (w.cOff[m+1] - w.cOff[m] > 1) split++;
-      res.events.nucleation = { seam_edges: w.sA.length, within_10deg_of_equator: near, split_markers: split, worst_budget: +err.toExponential(1), events: w.events, ran_to_Myr: +w.t.toFixed(1), stopped: w.exhausted ? w.fail : null }; }
+      // chains: connected components of the seam-edge graph; and the band's own width for scale
+      const par = new Map(), find = m => { while (par.get(m) !== m) m = par.get(m); return m; };
+      for (let e = 0; e < w.sA.length; e++) for (const m of [w.sA[e], w.sB[e]]) if (!par.has(m)) par.set(m, m);
+      for (let e = 0; e < w.sA.length; e++) { const r1 = find(w.sA[e]), r2 = find(w.sB[e]); if (r1 !== r2) par.set(r1, r2); }
+      const chains = new Set([...par.keys()].map(find)).size;
+      let lat = 0; for (let e = 0; e < w.sA.length; e++) lat = Math.max(lat, Math.abs(Math.asin(0.5 * (w.X[3*w.sA[e]+2] + w.X[3*w.sB[e]+2]))) * 180 / Math.PI);
+      let branch = 0; for (let m = 0; m < w.X.length / 3; m++) if (w.sCount[m] > 2) branch++;
+      res.events.nucleation = { seam_edges: w.sA.length, ring_edges_estimate: Math.round(2 * Math.PI / w.L0), chains, branch_markers: branch, max_latitude_deg: +lat.toFixed(1), within_10deg_of_equator: near, split_markers: split, worst_budget: +err.toExponential(1), events: w.events, ran_to_Myr: +w.t.toFixed(1), stopped: w.exhausted ? w.fail : null }; }
     // Subduction initiation: a transform pushed shut between old north (80 Myr) and young south (5 Myr). The old side must subduct.
     { const w = hemis(TRANSFORM, (x, y, z, p) => ({ h: PHYS.h_oc, rho: PHYS.rho_oc, Th: ThAge(p === 0 ? 80 : 5) })); w.bodyForce = meridional(1);
       // initiation fires at τ = 2 Myr; the push never relents, so later evolution is not this rule's test

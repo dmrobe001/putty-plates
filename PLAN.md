@@ -250,10 +250,41 @@ Along ordinary seams this reduces to the old one-sided rules.
 - **Everything else is unchanged:** one-sided coupling, slab feedback, every event scenario, and budgets at about 4 × 10⁻¹⁵.
 - **The runaway nucleation under the unrelenting initiation push is not caused by the junction drift.** It is essentially unchanged: 695 nucleations by 8 Myr, against 739 before the fix.
 
+## Slice 8 (step 7): nucleation along creases of integrity (done)
+
+A fault forms along the weakest line of a damaged band, not across its width. The old rule nucleated every edge whose two ends averaged below s_nuc, which filled a band several cells wide with seams. The new rule (document §1.10 table; `seamEvents`) is a crease test:
+- both ends of the edge are below s_nuc;
+- both markers flanking it (the apexes of its two triangles) are less damaged than either end.
+
+Edges across a band fail, because one end is up the flank. Edges beside a seam fail, because the seam's markers (integrity ≈ 0, a marker's integrity being that of its most damaged copy) are lower. The persistence time is unchanged.
+
+### Measured (`npm run check`, about 15 s)
+
+- **Shear-band nucleation** (one sheet, zonal shear, k_d = 40):
+
+  | | Old rule | Crease rule |
+  | --- | --- | --- |
+  | Seam edges by 14 Myr | 501 (the whole band) | 76 |
+  | Chains | | 2 |
+  | Branch markers | | 2 |
+  | Farthest from the equator | 10° | 2.6° |
+
+  A full ring at this resolution is about 62 edges.
+- **The post-window runaways are gone:**
+  - Shear band, extended to 20 Myr: 74–84 edges throughout, all within 10° (old rule: 1,512 edges, two-thirds outside 10°).
+  - Unrelenting initiation push, to 8 Myr: 3 nucleations (old rule: 695). Interior damage still goes deep (minimum integrity 0.008), but forms no creases.
+  - So the runaway came from the old rule, not from the junction drift or the push.
+- **Everything else is unchanged:** subduction initiation 59/59 old side, rifting, ridge death, breakoff and reversal, budgets about 4 × 10⁻¹⁵.
+
+### Noticed, not investigated
+
+- **Shear-only push:** 37 transform edges become trenches by 20 Myr. Possibly local compression on zig-zag edges.
+- **Initiation push:** seam edges grow from 61 to 132 by 8 Myr without nucleation. Possibly seam splits along the trench.
+
 ## Next, in order
 
 Physics first (see "How we work" in the README). Each step comes with component checks on small hand-built worlds (`makeWorld` with `plateOf`, `seamOf`, `stateOf`; `w.bodyForce`).
 
-7. **Narrow nucleation**: nucleation currently converts every damaged edge in a band into a seam. Nucleating only along the band's minimum of integrity would give single faults. Check: the nucleation scenario yields one connected chain. Then look again at the runaway nucleation that unrelenting pushes produce once runs survive.
+The planned steps are done. Next is a whole-planet run in a real browser: the small planet (seed 11, 2,000 markers) used to stop at 5.8 Myr on junction slivers. Whatever limits it now decides the next step.
 
 Numerics, only when stability or looks need them: second-order transport (§2.3), the exact intersection remap (§2.9), a geometric conservation law exact on the sphere, WebGPU kernels and multigrid (§3).
